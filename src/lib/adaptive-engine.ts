@@ -53,9 +53,30 @@ const DEFAULT_CONFIG: AdaptiveConfig = {
 
 const ADAPTIVE_KEY = "asvab_adaptive_user_model_v1";
 
+function hasLocalStorage(): boolean {
+  try {
+    return typeof localStorage !== 'undefined';
+  } catch (e) {
+    return false;
+  }
+}
+
 // Load adaptive user model
 export function loadAdaptiveUserModel(): AdaptiveUserModel {
   try {
+    if (!hasLocalStorage()) {
+      // localStorage not available in this environment (Node scripts); return defaults without logging
+      return {
+        statsByFormula: {},
+        statsByCategory: {},
+        mastery: {},
+        questionWeights: {},
+        lastSession: { timestamp: Date.now(), mode: 'AR' },
+        questionPool: {},
+        reviewQueue: [],
+        engineConfig: DEFAULT_CONFIG
+      };
+    }
     const raw = localStorage.getItem(ADAPTIVE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
@@ -90,6 +111,10 @@ export function loadAdaptiveUserModel(): AdaptiveUserModel {
 // Save adaptive user model
 export function saveAdaptiveUserModel(model: AdaptiveUserModel): void {
   try {
+    if (!hasLocalStorage()) {
+      // Running server-side; skip persistence
+      return;
+    }
     localStorage.setItem(ADAPTIVE_KEY, JSON.stringify(model));
     // Notify any listeners that the adaptive model updated so UI can refresh in real-time
     try {
@@ -218,6 +243,7 @@ export function recordAttempt(
 const ATTEMPT_LOG_KEY = 'asvab_attempt_log_v1';
 function appendAttemptLog(entry: { ts: number; qId?: number; formulaId: string; category: string; correct: boolean; timeMs: number; difficulty: string; source?: string; [key: string]: any }): 'added' | 'replaced' | 'skipped' {
   try {
+    if (!hasLocalStorage()) return 'skipped';
     const raw = localStorage.getItem(ATTEMPT_LOG_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     const dayKey = (ts: number) => {
@@ -291,7 +317,7 @@ function updateMonthlySummaries(attemptLog: Array<any>) {
       out.push({ month: k, attempts: entry.attempts, correct: entry.correct, accuracy: entry.attempts ? (entry.correct / entry.attempts) : 0 });
     }
 
-    try { localStorage.setItem(MONTHLY_SUMMARY_KEY, JSON.stringify(out)); } catch (e) {}
+  try { if (hasLocalStorage()) localStorage.setItem(MONTHLY_SUMMARY_KEY, JSON.stringify(out)); } catch (e) {}
   } catch (e) {
     // swallow
   }
@@ -303,6 +329,7 @@ function updateMonthlySummaries(attemptLog: Array<any>) {
 export function rebuildAdaptiveModelFromAttemptLog(): AdaptiveUserModel {
   const mdl = loadAdaptiveUserModel();
   try {
+    if (!hasLocalStorage()) return mdl;
     const raw = localStorage.getItem(ATTEMPT_LOG_KEY);
     if (!raw) return mdl;
     const entries = JSON.parse(raw) as Array<any>;
@@ -379,6 +406,24 @@ export function getUserDifficultyFromAttemptLog(days: number = 30): 'Easy' | 'In
     return 'Intermediate';
   } catch (e) {
     return 'Unknown';
+  }
+}
+
+// Recommend difficulty for a category using category mastery and recent performance
+export function getRecommendedDifficultyForCategory(model: AdaptiveUserModel | null, category: 'AR' | 'MK'): 'easy' | 'medium' | 'hard' {
+  try {
+    const mdl = model || loadAdaptiveUserModel();
+    const stats = (mdl && mdl.statsByCategory && mdl.statsByCategory[category]) || null;
+    // Not enough data -> start easy
+    if (!stats || (stats.attempts || 0) < 5) return 'easy';
+    const mastery = stats.correct / stats.attempts;
+    const ewma = (stats as any)?.ewma || mastery;
+    // Use scaled rules
+    if (ewma >= 0.86) return 'hard';
+    if (ewma >= 0.65) return 'medium';
+    return 'easy';
+  } catch (e) {
+    return 'easy';
   }
 }
 

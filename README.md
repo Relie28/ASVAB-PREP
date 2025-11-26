@@ -84,3 +84,26 @@ The dashboard should also keep track of the user's current difficulty level base
 - The Dashboard shows top strengths (formulas where your mastery is highest), areas to improve (formulas with low mastery and sufficient attempts), and all topics you've attempted ordered by frequency.
 - Strengths and Areas to Improve are computed from the adaptive model (derived from the attempt log). The heuristics favor formulas with more attempts to avoid noisy classification.
 - If you want to adjust thresholds or consider different time windows, these values are derived from the last 30 days by default; we can add UI toggles for other windows if desired.
+
+## AI generation and privacy
+
+- By default the app uses the free Grok AI runtime on the client (via the `z-ai-web-dev-sdk`) to generate practice problems in real time. No server-side infrastructure is required — AI calls are performed directly from the user's device.
+- If Grok is not available or the client cannot reach it, the app falls back to a deterministic, locally-executed generator to guarantee offline behaviour and full privacy.
+- Problems are generated adaptively in real time and prioritized toward topics where numerical mastery is low, starting at an easier difficulty and increasing difficulty as the user answers correctly.
+- To override the AI endpoint (for local dev or alternate providers), set `localStorage.setItem('ai_endpoint', '<your-endpoint-url>')` in the browser console. The app will prefer that endpoint when present.
+
+## AI Settings & Debugging
+
+- A new Settings dialog allows users to opt-in or out of client-side AI generation and to save that preference to their user profile. The setting is persisted to localStorage (`ai_enabled`) and optionally to the user model.
+- The system tracks AI fallback events and logs them to `localStorage` (key: `ai_event_log`) and exposes a `getAiStatus()` helper that indicates whether SDK is available, endpoint presence, and fallback counts. The Settings dialog displays current AI status and allows clearing AI logs.
+
+## Answer normalization and tolerant matching
+
+- The platform now uses improved answer normalization for client-side answer checking. Numeric answers accept a small tolerance (default ±0.02) to account for floating point representation differences and minor rounding. Text answers are normalized and compared with a fuzzy similarity threshold so small typos won't falsely mark a correct answer as wrong. This change improves fairness across AI-generated and deterministic problem outputs.
+
+## Running the Test Scripts
+
+- There are small local test scripts under `/scripts` used for smoke testing and validation. Examples:
+  - `scripts/smoke_dedupe.ts` — verifies deduping of attempt logs and model rebuild.
+  - `scripts/test_ai_generation.ts` — validates AI generation & batch generation functions.
+  - `scripts/test_answers.mjs` — a small test script that verifies answer comparison heuristics (run with `node scripts/test_answers_runner.mjs`).

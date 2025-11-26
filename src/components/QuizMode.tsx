@@ -7,11 +7,16 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ArrowLeft, CheckCircle, XCircle, Clock, Target, Trophy, Calculator } from "lucide-react";
-import { Question, generateARQuestion, generateMKQuestion, batchGenerate } from "@/lib/question-generator";
+import { Question, generateARQuestion, generateMKQuestion, batchGenerate, batchGenerateAI, shuffleChoicesForQuestion } from "@/lib/question-generator";
+import { normalizeText } from '@/ai/duplicates';
 import { loadUserModel, saveUserModel, updateUserModel } from "@/lib/decision-engine";
 import { handlePostAttempt, loadAdaptiveUserModel } from "@/lib/adaptive-engine";
+import { isAnswerCorrect } from '@/ai/answers';
+import { getDeepTeaching } from '@/lib/decision-engine';
+import { useConceptMastery } from '@/hooks/useConceptMastery';
 
 interface QuizModeProps {
   mode: "AR" | "MK";
@@ -35,6 +40,13 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
   const [questionStartTime, setQuestionStartTime] = useState<number>(0);
   const [userModel, setUserModel] = useState<any>(null);
   const [adaptiveModel, setAdaptiveModel] = useState<any>(null);
+  const persistGenerated = typeof window !== 'undefined' ? (localStorage.getItem('ai_persist_generated') === 'true') : false;
+  const mastery = useConceptMastery();
+  const [currentCycleFormula, setCurrentCycleFormula] = useState<string | null>(null);
+  const [isRecallMode, setIsRecallMode] = useState(false);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [breakdownContent, setBreakdownContent] = useState<any | null>(null);
+  const [breakdownStepsCompleted, setBreakdownStepsCompleted] = useState<boolean[]>([]);
 
   useEffect(() => {
     // Load user models
@@ -42,17 +54,32 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
     const adaptiveModel = loadAdaptiveUserModel();
     setUserModel(userModel);
     setAdaptiveModel(adaptiveModel);
-
-    // Generate quiz questions
-    const quizQuestions = batchGenerate(10, mode);
-    const formattedQuestions = quizQuestions.map(q => ({
-      question: q,
-      userAnswer: null,
-      isCorrect: null,
-      timeSpent: 0
-    }));
-    
-    setQuestions(formattedQuestions);
+    // Generate quiz questions adaptively in small batches; keep fetching more to fill pool
+    (async () => {
+      const targetCount = 10;
+      const initialBatchSize = 3;
+      let quizQuestions: Question[] = [];
+    try {
+  quizQuestions = await batchGenerateAI(initialBatchSize, mode, adaptiveModel, undefined, undefined, { persist: persistGenerated });
+      } catch (e) {
+        quizQuestions = batchGenerate(initialBatchSize, mode);
+      }
+      const formattedQuestions = quizQuestions.map(q => ({ question: q, userAnswer: null, isCorrect: null, timeSpent: 0 }));
+      setQuestions(formattedQuestions);
+      // Refill background until targetCount reached
+      (async () => {
+        while (formattedQuestions.length < targetCount) {
+          try {
+            const more = await batchGenerateAI(Math.min(3, targetCount - formattedQuestions.length), mode, adaptiveModel, undefined, undefined, { persist: persistGenerated });
+            more.forEach(q => formattedQuestions.push({ question: q, userAnswer: null, isCorrect: null, timeSpent: 0 }));
+          } catch (e) {
+            const fallback = batchGenerate(Math.min(3, targetCount - formattedQuestions.length), mode);
+            fallback.forEach(q => formattedQuestions.push({ question: q, userAnswer: null, isCorrect: null, timeSpent: 0 }));
+          }
+          setQuestions([...formattedQuestions]);
+        }
+      })();
+    })();
     setStartTime(Date.now());
     setQuestionStartTime(Date.now());
   }, [mode]);
@@ -69,7 +96,7 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
     const endTime = Date.now();
     const timeSpent = endTime - questionStartTime;
 
-    const isCorrect = selectedAnswer === currentQuizQuestion.question.answer.toString();
+  const isCorrect = isAnswerCorrect(currentQuizQuestion.question.answer, selectedAnswer);
     
     // Update the question in the array
     const updatedQuestions = [...questions];
@@ -105,15 +132,171 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
       , source: 'quiz' });
       setAdaptiveModel(updatedAdaptiveModel);
     }
+    // Mastery loop handling for quiz mode
+    try {
+      const res = mastery.recordAttempt(currentQuizQuestion.question.formulaId, isCorrect, { isRecall: isRecallMode });
+      if (!isCorrect) {
+        mastery.startCycle(currentQuizQuestion.question.formulaId);
+        setCurrentCycleFormula(currentQuizQuestion.question.formulaId);
+  const teach = getDeepTeaching(currentQuizQuestion.question.formulaId);
+  const steps = (currentQuizQuestion.question.solveSteps || teach.steps || []);
+  setBreakdownContent({ definition: teach.definition, steps: steps, tips: teach.tips });
+  setBreakdownStepsCompleted(steps.map(() => false));
+        setShowBreakdown(true);
+        setIsRecallMode(false);
+      } else if (res && (res as any).event === 'cycle_to_recall') {
+        setIsRecallMode(true);
+        setShowBreakdown(false);
+      } else if (res && (res as any).event === 'recall_correct') {
+        setIsRecallMode(false);
+        setShowBreakdown(false);
+        setCurrentCycleFormula(null);
+        setBreakdownStepsCompleted([]);
+      }
+    } catch (e) {}
   };
 
   const handleNext = () => {
+    // If in a mastery cycle for a formula, prefer to queue the next question for the same formula (or recall style), replacing the next item
+    if (currentCycleFormula) {
+      const st = mastery.get(currentCycleFormula);
+      if (st && st.inRecall) {
+        (async () => {
+          try {
+            const prevQ = currentQuizQuestion.question;
+            if (!prevQ) { if (currentQuestionIndex < questions.length - 1) setCurrentQuestionIndex(prev => prev + 1); else setQuizCompleted(true); return; }
+            const prevText = normalizeText(prevQ.text || '');
+            const prevAns = prevQ.answer;
+            let q: Question | null = null; let attempts = 0;
+            while (attempts < 6 && !q) {
+              const more = await batchGenerateAI(1, mode, loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated, forceParaphrase: true });
+              const cand = more && more.length ? more[0] : null;
+              if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(cand, prevIndex === -1 ? undefined : prevIndex);
+                break;
+              }
+              attempts++;
+            }
+            if (!q) {
+              let fallbackCandidate: Question | null = null; let tries = 0;
+              while (!fallbackCandidate && tries < 10) {
+                const det = mode === 'AR' ? generateARQuestion(currentCycleFormula as any, 'medium') : generateMKQuestion(currentCycleFormula as any, 'medium');
+                if (String(det.answer) !== String(prevAns)) fallbackCandidate = det as any;
+                tries++;
+              }
+              if (fallbackCandidate) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(fallbackCandidate as any, prevIndex === -1 ? undefined : prevIndex);
+              }
+            }
+            if (!q || q.formulaId !== currentCycleFormula) {
+              const forced = await batchGenerateAI(1, mode, loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated });
+              const cand = forced && forced[0] ? forced[0] : null;
+              if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(cand as any, prevIndex === -1 ? undefined : prevIndex);
+              }
+            }
+            if (q) {
+              const updatedQuestions = [...questions];
+              if (currentQuestionIndex < updatedQuestions.length - 1) {
+                updatedQuestions[currentQuestionIndex + 1] = { question: q, userAnswer: null, isCorrect: null, timeSpent: 0 };
+                setQuestions(updatedQuestions);
+                setCurrentQuestionIndex(prev => prev + 1);
+                setSelectedAnswer("");
+                setShowResult(false);
+                setBreakdownStepsCompleted([]);
+                setQuestionStartTime(Date.now());
+              } else {
+                updatedQuestions.push({ question: q, userAnswer: null, isCorrect: null, timeSpent: 0 });
+                setQuestions(updatedQuestions);
+                setCurrentQuestionIndex(prev => prev + 1);
+                setSelectedAnswer("");
+                setShowResult(false);
+                setBreakdownStepsCompleted([]);
+                setQuestionStartTime(Date.now());
+              }
+            } else {
+              if (currentQuestionIndex < questions.length - 1) { setCurrentQuestionIndex(prev => prev + 1); setSelectedAnswer(""); setShowResult(false); setQuestionStartTime(Date.now()); } else setQuizCompleted(true);
+            }
+          } catch (e) { if (currentQuestionIndex < questions.length - 1) { setCurrentQuestionIndex(prev => prev + 1); setSelectedAnswer(""); setShowResult(false); setQuestionStartTime(Date.now()); } else setQuizCompleted(true); }
+        })();
+        return;
+      }
+      if (st && st.inCycle) {
+        (async () => {
+          try {
+            const prevQ = currentQuizQuestion.question;
+            if (!prevQ) { if (currentQuestionIndex < questions.length - 1) setCurrentQuestionIndex(prev => prev + 1); else setQuizCompleted(true); return; }
+            const prevText = normalizeText(prevQ.text || '');
+            const prevAns = prevQ.answer;
+            let q: Question | null = null; let attempts = 0;
+            while (attempts < 6 && !q) {
+              const more = await batchGenerateAI(1, mode, loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated, forceParaphrase: true });
+              const cand = more && more.length ? more[0] : null;
+              if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(cand, prevIndex === -1 ? undefined : prevIndex);
+                break;
+              }
+              attempts++;
+            }
+            if (!q) {
+              let fallbackCandidate: Question | null = null; let tries = 0;
+              while (!fallbackCandidate && tries < 10) {
+                const det = mode === 'AR' ? generateARQuestion(currentCycleFormula as any, 'medium') : generateMKQuestion(currentCycleFormula as any, 'medium');
+                if (String(det.answer) !== String(prevAns)) fallbackCandidate = det as any;
+                tries++;
+              }
+              if (fallbackCandidate) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(fallbackCandidate as any, prevIndex === -1 ? undefined : prevIndex);
+              }
+            }
+            if (!q || q.formulaId !== currentCycleFormula) {
+              const forced = await batchGenerateAI(1, mode, loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated });
+              const cand = forced && forced[0] ? forced[0] : null;
+              if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(cand as any, prevIndex === -1 ? undefined : prevIndex);
+              }
+            }
+            if (q) {
+              const updatedQuestions = [...questions];
+              if (currentQuestionIndex < updatedQuestions.length - 1) {
+                updatedQuestions[currentQuestionIndex + 1] = { question: q, userAnswer: null, isCorrect: null, timeSpent: 0 };
+                setQuestions(updatedQuestions);
+                setCurrentQuestionIndex(prev => prev + 1);
+                setSelectedAnswer("");
+                setShowResult(false);
+                setBreakdownStepsCompleted([]);
+                setQuestionStartTime(Date.now());
+              } else {
+                updatedQuestions.push({ question: q, userAnswer: null, isCorrect: null, timeSpent: 0 });
+                setQuestions(updatedQuestions);
+                setCurrentQuestionIndex(prev => prev + 1);
+                setSelectedAnswer("");
+                setShowResult(false);
+                setBreakdownStepsCompleted([]);
+                setQuestionStartTime(Date.now());
+              }
+            } else {
+              if (currentQuestionIndex < questions.length - 1) { setCurrentQuestionIndex(prev => prev + 1); setSelectedAnswer(""); setShowResult(false); setBreakdownStepsCompleted([]); setQuestionStartTime(Date.now()); } else { setBreakdownStepsCompleted([]); setQuizCompleted(true); }
+            }
+          } catch (e) { if (currentQuestionIndex < questions.length - 1) { setCurrentQuestionIndex(prev => prev + 1); setSelectedAnswer(""); setShowResult(false); setQuestionStartTime(Date.now()); } else setQuizCompleted(true); }
+        })();
+        return;
+      }
+    }
     if (currentQuestionIndex < questions.length - 1) {
       setCurrentQuestionIndex(prev => prev + 1);
       setSelectedAnswer("");
       setShowResult(false);
+      setBreakdownStepsCompleted([]);
       setQuestionStartTime(Date.now());
     } else {
+      setBreakdownStepsCompleted([]);
       setQuizCompleted(true);
     }
   };
@@ -139,21 +322,24 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
   };
 
   const restartQuiz = () => {
-    const quizQuestions = batchGenerate(10, mode);
-    const formattedQuestions = quizQuestions.map(q => ({
-      question: q,
-      userAnswer: null,
-      isCorrect: null,
-      timeSpent: 0
-    }));
-    
-    setQuestions(formattedQuestions);
-    setCurrentQuestionIndex(0);
-    setSelectedAnswer("");
-    setShowResult(false);
-    setQuizCompleted(false);
-    setStartTime(Date.now());
-    setQuestionStartTime(Date.now());
+    (async () => {
+      let quizQuestions: Question[] = [];
+      const adaptiveModel = loadAdaptiveUserModel();
+  try { quizQuestions = await batchGenerateAI(10, mode, adaptiveModel, undefined, undefined, { persist: persistGenerated }); } catch (e) { quizQuestions = batchGenerate(10, mode); }
+      const formattedQuestions = quizQuestions.map(q => ({
+        question: q,
+        userAnswer: null,
+        isCorrect: null,
+        timeSpent: 0
+      }));
+      setQuestions(formattedQuestions);
+      setCurrentQuestionIndex(0);
+      setSelectedAnswer("");
+      setShowResult(false);
+      setQuizCompleted(false);
+      setStartTime(Date.now());
+      setQuestionStartTime(Date.now());
+    })();
   };
 
   if (quizCompleted) {
@@ -305,6 +491,7 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
             </CardTitle>
             <CardDescription>
               Select the correct answer from the options below.
+              Problems are generated on the fly by the AI and adapt to your ongoing performance.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -327,7 +514,7 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
 
                 <Button 
                   onClick={handleSubmit} 
-                  disabled={!selectedAnswer}
+                  disabled={!selectedAnswer || showBreakdown}
                   className="w-full"
                 >
                   Submit Answer
@@ -355,6 +542,43 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
                   </div>
                 )}
 
+                {showBreakdown && breakdownContent && (
+                  <div className="bg-white p-4 rounded-lg border mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-medium text-gray-900">Explanation & Tips</p>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-600">{breakdownStepsCompleted.filter(Boolean).length} / {(currentQuizQuestion.question.solveSteps || breakdownContent.steps || []).length}</div>
+                      </div>
+                    </div>
+                    <div className="mb-2"><strong>Definition:</strong> {breakdownContent.definition}</div>
+                    <div className="mb-2">
+                      <strong>Steps:</strong>
+                      <ol className="ml-4 list-decimal">
+                        {(currentQuizQuestion.question.solveSteps || breakdownContent.steps || []).map((s: string, i: number) => (
+                          <li key={i} className="text-sm text-gray-700 flex items-center gap-2">
+                            <Checkbox checked={!!breakdownStepsCompleted[i]} onCheckedChange={(v) => {
+                              setBreakdownStepsCompleted(prev => {
+                                const out = [...prev];
+                                out[i] = !!v;
+                                return out;
+                              });
+                            }} />
+                            <span>{s}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    {breakdownContent.tips && breakdownContent.tips.length > 0 && (
+                      <div className="mb-2">
+                        <strong>How to identify:</strong>
+                        <ul className="ml-4 list-disc text-sm text-gray-700">
+                          {breakdownContent.tips.map((t: string, i: number) => <li key={i}>{t}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <p className="font-medium text-gray-900 mb-2">Solution Steps:</p>
                   <ul className="text-gray-700 space-y-1">
@@ -374,7 +598,7 @@ export default function QuizMode({ mode, onExit }: QuizModeProps) {
                   </div>
                 </div>
 
-                <Button onClick={handleNext} className="w-full">
+                <Button onClick={handleNext} className="w-full" disabled={showBreakdown && breakdownStepsCompleted.length > 0 && !breakdownStepsCompleted.every(Boolean)}>
                   {currentQuestionIndex < questions.length - 1 ? "Next Question" : "Finish Quiz"}
                 </Button>
               </div>
