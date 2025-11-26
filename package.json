@@ -6,6 +6,9 @@
     "dev": "next dev -p 3000",
     "dev:poll": "CHOKIDAR_USEPOLLING=1 next dev -p 3000",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
+    "export": "next build && next export",
+    "deploy:gh-pages": "npm run export && npx gh-pages -d out",
+    "serve:out": "npx serve out -s -l 8080",
     "start": "NODE_ENV=production node .next/standalone/server.js 2>&1 | tee server.log",
     "lint": "next lint",
   "smoke:test": "tsx scripts/smoke_dedupe.ts",
@@ -86,6 +89,7 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "gh-pages": "^5.0.0",
     "@eslint/eslintrc": "^3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
