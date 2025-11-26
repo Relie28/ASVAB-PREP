@@ -9,7 +9,7 @@ async function run() {
   try {
     await fs.access(apiPath);
     // If disabled already exists, remove it first (shouldn't happen normally)
-    try { await fs.access(disabledPath); console.log('Disabled API path already exists, removing.'); await fs.rm(disabledPath, { recursive: true, force: true }); } catch(e) {}
+    try { await fs.access(disabledPath); console.log('Disabled API path already exists, removing.'); await fs.rm(disabledPath, { recursive: true, force: true }); } catch (e) { }
     await fs.rename(apiPath, disabledPath);
     console.log(`Moved ${apiPath} -> ${disabledPath}`);
   } catch (e) {
