@@ -386,6 +386,16 @@ export const RULES: Rule[] = [
     difficulty: 2,
     category: "AR"
   },
+  {
+    id: "reading_table",
+    label: "Reading tables & interpreting numbers",
+    keywords: ["table", "chart", "read the table", "what does the table show", "in the table"],
+    partners: ["table", "chart"],
+    exclusions: [],
+    notes: "Interpret values from a table and perform simple aggregations or lookups",
+    difficulty: 2,
+    category: "AR"
+  },
 
   // Money and Mixtures
   { 
@@ -440,6 +450,26 @@ export const RULES: Rule[] = [
     exclusions: [], 
     notes: "find rule", 
     difficulty: 3,
+    category: "MK"
+  },
+  {
+    id: "polynomial_factor",
+    label: "Polynomial factoring",
+    keywords: ["factor", "factoring", "x^2", "trinomial", "factor into"],
+    partners: [],
+    exclusions: [],
+    notes: "Factor simple quadratics like x^2 + bx + c",
+    difficulty: 4,
+    category: "MK"
+  },
+  {
+    id: "systems_two_eqs",
+    label: "Systems of two equations",
+    keywords: ["system of equations", "solve the system", "x + y", "simultaneous equations"],
+    partners: ["x", "y"],
+    exclusions: [],
+    notes: "Solve two linear equations in two variables",
+    difficulty: 4,
     category: "MK"
   },
 

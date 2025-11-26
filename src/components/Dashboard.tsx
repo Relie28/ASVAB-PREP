@@ -10,6 +10,9 @@ import { ArrowLeft, TrendingUp, TrendingDown, Target, Trophy, BookOpen, Calculat
 import { loadUserModel } from "@/lib/decision-engine";
 import { loadAdaptiveUserModel, saveAdaptiveUserModel, recordAttempt, rebuildAdaptiveModelFromAttemptLog, getUserDifficultyFromAttemptLog, handlePostAttempt, registerQuestion } from "@/lib/adaptive-engine";
 import generateProblem from '@/ai/generateProblem';
+// generateARQuestion/generateMKQuestion not used here (kept for other components)
+import { isAnswerCorrect } from '@/ai/answers';
+import SettingsDialog from '@/components/Settings';
 import { runAutoPurge } from '@/utils/purge';
 import { estimateAFQT } from '@/engine/scoreEstimation';
 import { adjustDifficulty } from '@/engine/difficulty';
@@ -39,13 +42,9 @@ export default function Dashboard({ onExit }: DashboardProps) {
   const [rebuildNeeded, setRebuildNeeded] = useState<boolean>(false);
   const [difficulty, setDifficulty] = useState<'Easy'|'Intermediate'|'Hard'|'Unknown'>('Unknown');
   const isDev = process.env.NODE_ENV === 'development';
-  const [aiProblem, setAiProblem] = useState<any | null>(null);
-  const [aiAnswer, setAiAnswer] = useState<string>('');
-  const [aiFeedback, setAiFeedback] = useState<any>(null);
-  const [aiTopic, setAiTopic] = useState<'AR' | 'MK'>('AR');
-  const [aiDifficultySetting, setAiDifficultySetting] = useState<'easy' | 'medium' | 'hard'>('medium');
-  const [aiStartTime, setAiStartTime] = useState<number | null>(null);
+  // AI problem card removed — keep a setting for AI generator
   const [scoreEstimate, setScoreEstimate] = useState<number | null>(null);
+  // AI enabled preference is managed in Settings (persisted to localStorage and user model)
 
   useEffect(() => {
     runAutoPurge();
@@ -357,6 +356,8 @@ export default function Dashboard({ onExit }: DashboardProps) {
     } catch (e) { setRebuildNeeded(false); }
   };
 
+  // removed AI topic/difficulty useEffect — AI practice card removed
+
   // Fix/reset daily training counts and ensure cached records are imported into adaptive model
   const fixDailyTrainingCounts = () => {
     try {
@@ -593,82 +594,9 @@ export default function Dashboard({ onExit }: DashboardProps) {
   };
 
   // AI Practice — request a new AI-generated problem
-  const loadNextAiProblem = async (topic?: 'AR' | 'MK', difficulty?: 'easy' | 'medium' | 'hard') => {
-    try {
-      const t = topic || aiTopic;
-      const d = difficulty || aiDifficultySetting;
-      const diffScore = d === 'easy' ? 1 : d === 'medium' ? 2 : 3;
-      const out = await generateProblem(t, diffScore);
-      if (!out) return;
-      // Use a numeric qId so engine can register and track it
-      const qId = Date.now();
+  // loadNextAiProblem removed — AI practice card removed
 
-      // Register question in adaptive model to make it trackable
-      try {
-        const mdl = loadAdaptiveUserModel();
-        const q = {
-          id: qId,
-          subject: t,
-          type: 'ai_generated',
-          text: out.problem,
-          formulaId: `ai_generated_${t}`,
-          keywords: [],
-          partners: [],
-          difficulty: d,
-          difficultyWeight: d === 'easy' ? 1 : d === 'medium' ? 2 : 3,
-          solveSteps: [out.explanation || ''],
-          answer: out.answer,
-          choices: [],
-          category: t
-        } as any;
-        registerQuestion(mdl, q as any);
-        // Save model after registering so the questionPool is persisted
-        saveAdaptiveUserModel(mdl);
-        setAdaptiveModel(mdl);
-      } catch (e) {
-        // ignore registration errors
-      }
-
-      setAiProblem({ ...out, _qId: qId });
-      setAiAnswer('');
-      setAiFeedback(null);
-      setAiStartTime(Date.now());
-    } catch (e) {
-      console.error('Failed to get AI problem', e);
-    }
-  };
-
-  const submitAiAnswer = (userAnswer: string) => {
-    if (!aiProblem) return;
-    try {
-      const elapsedMs = aiStartTime ? (Date.now() - aiStartTime) : 10000;
-      // Normalize comparison: numeric or trimmed string
-      let correct = false;
-      const expected = (aiProblem.answer || '').toString().trim().toLowerCase();
-      const actual = (userAnswer || '').toString().trim().toLowerCase();
-      if (expected === actual) correct = true;
-      // Try numeric equality if both parse as numbers
-      const nExp = Number(expected);
-      const nAct = Number(actual);
-      if (!isNaN(nExp) && !isNaN(nAct) && nExp === nAct) correct = true;
-
-      const mdl = handlePostAttempt(loadAdaptiveUserModel(), {
-        qId: aiProblem._qId,
-        formulaId: `ai_generated_${aiProblem.topic || aiTopic}`,
-        category: aiProblem.topic || aiTopic,
-        correct,
-        timeMs: elapsedMs,
-        difficulty: aiProblem.difficulty || aiDifficultySetting,
-        source: 'ai_generated'
-      });
-      setAdaptiveModel(mdl);
-      setAiFeedback({ correct, expected: aiProblem.answer, explanation: aiProblem.explanation || '' });
-      // Update score estimate
-      try { setScoreEstimate(estimateAFQT(mdl?.statsByCategory || {}, formulaMasteries || [])); } catch (e) {}
-    } catch (e) {
-      console.error('Failed to submit AI answer', e);
-    }
-  };
+  // submitAiAnswer removed — AI practice UI removed
 
   const getOverallMastery = () => {
     // Prefer computing overall mastery from formula masteries (which may include cached aggregates)
@@ -889,16 +817,17 @@ export default function Dashboard({ onExit }: DashboardProps) {
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
-          <Button variant="outline" onClick={onExit} className="flex items-center gap-2">
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Button>
-          
+          <div className="flex items-center gap-3">
+            <Button variant="outline" onClick={onExit} className="flex items-center gap-2">
+              <ArrowLeft className="w-4 h-4" />
+              Back to Home
+            </Button>
+            <SettingsDialog />
+          </div>
+
           <div className="flex items-center gap-4">
             <h1 className="text-2xl font-bold">Your Dashboard</h1>
-            <Badge variant="outline" className="text-lg px-4 py-2">
-              Progress Overview
-            </Badge>
+            <Badge variant="outline" className="text-lg px-4 py-2">Progress Overview</Badge>
           </div>
         </div>
 
@@ -1061,58 +990,7 @@ export default function Dashboard({ onExit }: DashboardProps) {
           </CardContent>
         </Card>
 
-        {/* AI Practice Card */}
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle>AI Practice</CardTitle>
-            <CardDescription>Generate a custom practice problem (client-only)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
-              <div>
-                <label className="text-sm text-gray-600">Topic</label>
-                <select className="w-full mt-1 p-2 border rounded" value={aiTopic} onChange={(e) => setAiTopic(e.target.value as any)}>
-                  <option value="AR">AR - Arithmetic Reasoning</option>
-                  <option value="MK">MK - Mathematics Knowledge</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-sm text-gray-600">Difficulty</label>
-                <select className="w-full mt-1 p-2 border rounded" value={aiDifficultySetting} onChange={(e) => setAiDifficultySetting(e.target.value as any)}>
-                  <option value="easy">Easy</option>
-                  <option value="medium">Medium</option>
-                  <option value="hard">Hard</option>
-                </select>
-              </div>
-              <div className="flex items-end">
-                <Button onClick={() => loadNextAiProblem()} className="w-full">Next Problem</Button>
-              </div>
-            </div>
-
-            {aiProblem ? (
-              <div className="border rounded p-4 bg-white">
-                <div className="mb-2 text-sm text-gray-600">Problem</div>
-                <div className="text-lg font-medium mb-3">{aiProblem.problem}</div>
-                <div className="mb-3">
-                  <input value={aiAnswer} onChange={(e) => setAiAnswer(e.target.value)} className="w-full p-2 border rounded" placeholder="Enter your answer" />
-                </div>
-                <div className="flex gap-2">
-                  <Button onClick={() => submitAiAnswer(aiAnswer)}>Submit Answer</Button>
-                  <Button variant="ghost" onClick={() => setAiProblem(null)}>Clear</Button>
-                </div>
-                {aiFeedback && (
-                  <div className={`mt-3 p-3 ${aiFeedback.correct ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'} rounded`}> 
-                    <div>{aiFeedback.correct ? 'Correct!' : 'Incorrect'}</div>
-                    <div className="text-xs mt-1">Answer: {aiFeedback.expected}</div>
-                    {aiFeedback.explanation && <div className="text-xs mt-2 text-gray-700">{aiFeedback.explanation}</div>}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="text-sm text-gray-500">No AI problem loaded. Click "Next Problem" to generate one.</div>
-            )}
-          </CardContent>
-        </Card>
+        {/* AI Practice Card removed per request */}
 
           {/* Quick insights are shown in the 'All Topics Mastery' tab at the bottom of the Dashboard. */}
 

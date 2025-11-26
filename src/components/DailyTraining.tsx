@@ -9,8 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Target, ArrowLeft, Lightbulb } from "lucide-react";
 // Removed react-icons import, using lucide-react Lightbulb for both places
-import { batchGenerate, Question } from "@/lib/question-generator";
+import { batchGenerate, batchGenerateAI, Question, generateARQuestion, generateMKQuestion, shuffleChoicesForQuestion } from "@/lib/question-generator";
+import { normalizeText } from '@/ai/duplicates';
 import { handlePostAttempt, loadAdaptiveUserModel } from "@/lib/adaptive-engine";
+import { useConceptMastery } from '@/hooks/useConceptMastery';
+import { Checkbox } from '@/components/ui/checkbox';
+import { getDeepTeaching } from '@/lib/decision-engine';
+import { isAnswerCorrect } from '@/ai/answers';
 
 type DailyRecord = {
   date: string; // yyyy-mm-dd
@@ -73,6 +78,13 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
   const startQuestionTimeRef = useRef<number | null>(null);
   const sessionStartRef = useRef<number | null>(null);
   const [sessionResults, setSessionResults] = useState<any | null>(null);
+  const persistGenerated = typeof window !== 'undefined' ? (localStorage.getItem('ai_persist_generated') === 'true') : false;
+  const mastery = useConceptMastery();
+  const [currentCycleFormula, setCurrentCycleFormula] = useState<string | null>(null);
+  const [showBreakdown, setShowBreakdown] = useState(false);
+  const [breakdownContent, setBreakdownContent] = useState<any | null>(null);
+  const [breakdownStepsCompleted, setBreakdownStepsCompleted] = useState<boolean[]>([]);
+  const [isRecallMode, setIsRecallMode] = useState(false);
 
   // whether a new session is allowed (24-hour lockout since lastCompletedAt)
   const allowedToStart = (() => {
@@ -96,23 +108,41 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
     }
 
     const target = Math.max(5, Math.round(state.dailyTarget));
-    // generate mixed AR & MK questions
-    const half = Math.ceil(target / 2);
-    const ar = batchGenerate(half, "AR");
-    const mk = batchGenerate(target - half, "MK");
-    // interleave
-    const mixed: Question[] = [];
+    // generate mixed AR & MK questions using AI when possible
+    const mixedCount = Math.max(1, Math.floor(target * 0.1));
+    const half = Math.ceil((target - mixedCount) / 2);
+    (async () => {
+      let ar: Question[] = [];
+      let mk: Question[] = [];
+      let mixed: Question[] = [];
+  try {
+    const model = loadAdaptiveUserModel();
+  ar = await batchGenerateAI(half, 'AR', model, undefined, undefined, { persist: persistGenerated });
+  mk = await batchGenerateAI(target - half - mixedCount, 'MK', model, undefined, undefined, { persist: persistGenerated });
+  mixed = await batchGenerateAI(mixedCount, 'MIXED', model, undefined, undefined, { persist: persistGenerated });
+      } catch (e) {
+        ar = batchGenerate(half, "AR");
+        mk = batchGenerate(target - half - mixedCount, "MK");
+        mixed = batchGenerate(mixedCount, "AR");
+      }
+    // interleave with occasional mixed problems
+    const merging: Question[] = [];
     for (let i = 0; i < target; i++) {
-      mixed.push(i % 2 === 0 ? ar.shift()! : mk.shift()!);
+      if (mixed.length && i % 5 === 0) {
+        merging.push(mixed.shift()!);
+        continue;
+      }
+      merging.push(i % 2 === 0 ? ar.shift()! : mk.shift()!);
     }
-    setQuestions(mixed);
-    setAnswers(Array(mixed.length).fill(null));
-    setResponseTimes(Array(mixed.length).fill(null));
-    // reset timers and state
-    setRemainingSeconds(TOTAL_SECONDS);
-    setCurrentIdx(0);
-  startQuestionTimeRef.current = Date.now();
-  sessionStartRef.current = Date.now();
+  setQuestions(merging);
+      setAnswers(Array(mixed.length).fill(null));
+      setResponseTimes(Array(mixed.length).fill(null));
+      // reset timers and state
+      setRemainingSeconds(TOTAL_SECONDS);
+      setCurrentIdx(0);
+      startQuestionTimeRef.current = Date.now();
+      sessionStartRef.current = Date.now();
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.dailyTarget, allowedToStart]);
 
@@ -187,7 +217,7 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
           qId: q.id,
           formulaId: q.formulaId,
           category: q.category,
-          correct: choice !== null && choice === q.answer,
+          correct: choice !== null && isAnswerCorrect(q.answer, choice),
           timeMs: nextResponseTimes[currentIdx] || 0,
           difficulty: q.difficulty
         , source: 'live' });
@@ -197,6 +227,35 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
     } catch (e) {
       console.warn('Failed to record live attempt', e);
     }
+    // Mastery loop: start cycle on incorrect answers and show breakdown, pause progression
+    try {
+      const q = questions[currentIdx];
+      const wasCorrect = q && choice !== null && isAnswerCorrect(q.answer, choice);
+      if (!q) {
+        // nothing
+      } else {
+        const res = mastery.recordAttempt(q.formulaId, wasCorrect, { isRecall: isRecallMode });
+        if (!wasCorrect) {
+          mastery.startCycle(q.formulaId);
+          setCurrentCycleFormula(q.formulaId);
+        const teach = getDeepTeaching(q.formulaId);
+        const steps = (q.solveSteps || teach.steps || []);
+        setBreakdownContent({ definition: teach.definition, steps: steps, tips: teach.tips });
+      setBreakdownStepsCompleted(steps.map(() => false));
+          setShowBreakdown(true);
+          // don't auto-advance - user must tap continue
+          return;
+        } else if (res && (res as any).event === 'cycle_to_recall') {
+          setIsRecallMode(true);
+          setShowBreakdown(false);
+        } else if (res && (res as any).event === 'recall_correct') {
+          setIsRecallMode(false);
+          setShowBreakdown(false);
+          setCurrentCycleFormula(null);
+          setBreakdownStepsCompleted([]);
+        }
+      }
+    } catch (e) {}
     // move to next if any
     if (currentIdx < questions.length - 1) {
       setCurrentIdx((i) => i + 1);
@@ -205,6 +264,67 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
       finishSession(false, nextAnswers, nextResponseTimes);
     }
   }
+
+  const handleMasteryContinue = async () => {
+    if (!currentCycleFormula) {
+      // nothing — fallback to next question
+      if (currentIdx < questions.length - 1) setCurrentIdx(i => i + 1);
+      return;
+    }
+    try {
+      const prevQ = questions[currentIdx];
+      if (!prevQ) { if (currentIdx < questions.length - 1) setCurrentIdx(i => i + 1); return; }
+      const prevText = normalizeText(prevQ.text || '');
+      const prevAns = prevQ.answer;
+      let q: Question | null = null; let attempts = 0;
+      while (attempts < 6 && !q) {
+        const more = await batchGenerateAI(1, 'MIXED', loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated, forceParaphrase: true });
+        const cand = more && more.length ? more[0] : null;
+        if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+          const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+          q = shuffleChoicesForQuestion(cand, prevIndex === -1 ? undefined : prevIndex);
+          break;
+        }
+        attempts++;
+      }
+      if (!q) {
+        let fallbackCandidate: Question | null = null; let tries = 0;
+        while (!fallbackCandidate && tries < 10) {
+          const det = questions[currentIdx].category === 'AR' ? generateARQuestion(currentCycleFormula as any, 'medium') : generateMKQuestion(currentCycleFormula as any, 'medium');
+          if (String(det.answer) !== String(prevAns)) fallbackCandidate = det as any;
+          tries++;
+        }
+        if (fallbackCandidate) {
+          const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+          q = shuffleChoicesForQuestion(fallbackCandidate as any, prevIndex === -1 ? undefined : prevIndex);
+        }
+      }
+      if (!q || q.formulaId !== currentCycleFormula) {
+        const forced = await batchGenerateAI(1, 'MIXED', loadAdaptiveUserModel(), undefined, [prevText], { persist: persistGenerated });
+        const cand = forced && forced[0] ? forced[0] : null;
+        if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+          const prevIndex = (currentQuestion ? (currentQuestion.choices || []).findIndex(c => String(c) === String(prevAns)) : -1);
+          q = shuffleChoicesForQuestion(cand as any, prevIndex === -1 ? undefined : prevIndex);
+        }
+      }
+      if (q) {
+        const updated = [...questions];
+        if (currentIdx < updated.length - 1) {
+          updated[currentIdx + 1] = q;
+        } else updated.push(q);
+        setQuestions(updated);
+        setSelectedChoiceIndex(null);
+        setShowBreakdown(false);
+  setCurrentIdx(i => i + 1);
+  setBreakdownStepsCompleted([]);
+      } else {
+        if (currentIdx < questions.length - 1) setCurrentIdx(i => i + 1);
+      }
+    } catch (e) {
+      // fallback simple next
+      if (currentIdx < questions.length - 1) setCurrentIdx(i => i + 1);
+    }
+  };
 
   function finishSession(isTimeExpired: boolean = false, answersArg?: (number | string | null)[], responseTimesArg?: (number | null)[]) {
     // stop timers
@@ -216,7 +336,7 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
     let correct = 0;
     const perQuestionResults = questions.map((q, i) => {
       const chosen = answersToUse[i];
-      const isCorrect = chosen !== null && chosen === q.answer;
+      const isCorrect = chosen !== null && isAnswerCorrect(q.answer, chosen);
       if (isCorrect) correct++;
       return {
         id: q.id,
@@ -313,6 +433,7 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
         // gap > 1 day (or no previous) -> reset to 1 (start new streak)
         streak = 1;
         awarded = true;
+        
       }
     }
 
@@ -509,6 +630,7 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
               </CardTitle>
               <CardDescription>
                 Take your time to think through each problem — the session ends when the 30 minutes are up.
+                Problems are generated by the AI and adapt to your strengths and weaknesses.
               </CardDescription>
 
               {/* Hint panel moved below the question so the question text appears first */}
@@ -568,9 +690,46 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
                   if (selectedChoiceIndex === null) return;
                   const chosen = currentQuestion.choices[selectedChoiceIndex];
                   handleAnswer(chosen);
-                }} className="w-full py-3" disabled={selectedChoiceIndex === null}>
+                }} className="w-full py-3" disabled={selectedChoiceIndex === null || showBreakdown}>
                   Submit Answer
                 </Button>
+                {showBreakdown && breakdownContent && (
+                  <div className="bg-white p-4 rounded-lg border mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-medium text-gray-900">Detailed Breakdown</p>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-600">{breakdownStepsCompleted.filter(Boolean).length} / {(currentQuestion.solveSteps || breakdownContent.steps || []).length}</div>
+                      </div>
+                    </div>
+                    <div className="mb-2"><strong>Correct Answer:</strong> {currentQuestion.answer}</div>
+                    <div className="mb-2"><strong>Definition:</strong> {breakdownContent.definition}</div>
+                    <div className="mb-2">
+                      <strong>Steps:</strong>
+                      <ol className="ml-4 list-decimal">
+                        {(currentQuestion.solveSteps || breakdownContent.steps || []).map((s: string, i: number) => (
+                          <li key={i} className="text-sm text-gray-700 flex items-center gap-2">
+                            <Checkbox checked={!!breakdownStepsCompleted[i]} onCheckedChange={(v) => setBreakdownStepsCompleted(prev => {
+                              const out = [...prev]; out[i] = !!v; return out;
+                            })} />
+                            <span>{s}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    {breakdownContent.tips && breakdownContent.tips.length > 0 && (
+                      <div className="mb-2">
+                        <strong>How to identify:</strong>
+                        <ul className="ml-4 list-disc text-sm text-gray-700">
+                          {breakdownContent.tips.map((t: string, i: number) => <li key={i}>{t}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                      <div className="flex gap-3 mt-3">
+                      <Button onClick={handleMasteryContinue} className="flex-1" disabled={breakdownStepsCompleted.length > 0 && !breakdownStepsCompleted.every(Boolean)}>Continue</Button>
+                      <Button variant="outline" onClick={() => { setShowBreakdown(false); setBreakdownStepsCompleted([]); if (currentIdx < questions.length - 1) setCurrentIdx(i => i + 1); }}>Skip</Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

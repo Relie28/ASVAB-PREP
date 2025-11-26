@@ -1,4 +1,6 @@
 "use client";
+import { decideFormulas, getFormulaExplanation, loadUserModel, saveUserModel, updateUserModel, getDeepTeaching } from '@/lib/decision-engine';
+import { useConceptMastery } from '@/hooks/useConceptMastery';
 
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,10 +9,11 @@ import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from '@/components/ui/checkbox';
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ArrowLeft, CheckCircle, XCircle, Clock, Target, Lightbulb } from "lucide-react";
-import { Question, generateARQuestion, generateMKQuestion, batchGenerate } from "@/lib/question-generator";
-import { decideFormulas, getFormulaExplanation, loadUserModel, saveUserModel, updateUserModel } from "@/lib/decision-engine";
+import { Question, generateARQuestion, generateMKQuestion, batchGenerate, batchGenerateAI, shuffleChoicesForQuestion } from "@/lib/question-generator";
+import { normalizeText } from '@/ai/duplicates';
 import { handlePostAttempt, loadAdaptiveUserModel } from "@/lib/adaptive-engine";
 
 // Study Mode shouldn't persist daily training entries locally; it updates the canonical attempt log via the adaptive engine.
@@ -32,6 +35,7 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
   const [selectedFormula, setSelectedFormula] = useState<string>("");
   const [showResult, setShowResult] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
+  const [selectedAnswer, setSelectedAnswer] = useState<number | string | null>(null);
   const [explanation, setExplanation] = useState("");
   const [questionCount, setQuestionCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
@@ -41,6 +45,14 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
   const [adaptiveModel, setAdaptiveModel] = useState<any>(null);
   const [questionBank, setQuestionBank] = useState<Question[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const persistGenerated = typeof window !== 'undefined' ? (localStorage.getItem('ai_persist_generated') === 'true') : false;
+  // Mastery loop
+  const mastery = useConceptMastery();
+  const [currentCycleFormula, setCurrentCycleFormula] = useState<string | null>(null);
+  const [isRecallMode, setIsRecallMode] = useState<boolean>(false);
+  const [showBreakdown, setShowBreakdown] = useState<boolean>(false);
+  const [breakdownContent, setBreakdownContent] = useState<{ definition?: string; steps?: string[]; tips?: string[] } | null>(null);
+  const [breakdownStepsCompleted, setBreakdownStepsCompleted] = useState<boolean[]>([]);
 
   useEffect(() => {
     setIsLoading(true);
@@ -51,80 +63,89 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
     setUserModel(userModel);
     setAdaptiveModel(adaptiveModel);
 
-    // Generate initial question bank
-    let bank = batchGenerate(20, mode);
-    
-    // Fallback: if no questions generated, create a simple one
-    if (bank.length === 0) {
-      bank = [{
-        id: 1,
-        subject: mode,
-        type: 'fallback',
-        text: mode === 'AR' ? 'What is 15 + 25?' : 'What is 7 × 6?',
-        formulaId: mode === 'AR' ? 'add_simple' : 'multiply_simple',
-        keywords: mode === 'AR' ? ['add', 'sum'] : ['times', 'multiply'],
-        partners: [],
-        difficulty: 'easy',
-        difficultyWeight: 1,
-        solveSteps: mode === 'AR' ? ['15 + 25 = 40'] : ['7 × 6 = 42'],
-        answer: mode === 'AR' ? 40 : 42,
-        choices: mode === 'AR' ? [40, 35, 45, 50] : [42, 36, 48, 40],
-        category: mode
-      }];
-    }
-    
-    setQuestionBank(bank);
-
-    // Load first question after a short delay to ensure state is updated
-    setTimeout(() => {
-      if (bank.length > 0) {
-        const question = bank[0];
-        setQuestionBank(prev => prev.slice(1));
-        
-        setCurrentQuestion(question);
-        setSelectedFormula("");
-        setShowResult(false);
-        setStartTime(Date.now());
-        
-        // Get formula options using decision engine
-        try {
-          const scoredFormulas = decideFormulas(question.text);
-          const options = scoredFormulas.slice(0, 4).map(sf => ({
-            id: sf.id,
-            label: sf.rule.label,
-            confidence: sf.confidence
-          }));
-          
-          // Fallback: if no formula options, create basic ones
-          if (options.length === 0) {
-            setFormulaOptions([
-              { id: question.formulaId, label: question.formulaId, confidence: 1 }
-            ]);
-          } else {
-            setFormulaOptions(options);
-          }
-        } catch (error) {
-          // Fallback options
-          setFormulaOptions([
-            { id: question.formulaId, label: "Unknown Formula", confidence: 1 }
-          ]);
-        }
+    // Generate initial question bank -- prefer AI generated adaptive questions
+    let bank: Question[] = [];
+    (async () => {
+    try {
+  bank = await batchGenerateAI(20, mode, adaptiveModel, undefined, undefined, { persist: persistGenerated });
+      } catch (e) {
+        bank = batchGenerate(20, mode);
       }
-      setIsLoading(false);
-    }, 100);
+      if (!bank || bank.length === 0) {
+        bank = batchGenerate(20, mode);
+      }
+      // Fallback: if still empty, create a simple fallback
+      if (bank.length === 0) {
+        bank = [{
+          id: 1,
+          subject: mode,
+          type: 'fallback',
+          text: mode === 'AR' ? 'What is 15 + 25?' : 'What is 7 × 6?',
+          formulaId: mode === 'AR' ? 'add_simple' : 'multiply_simple',
+          keywords: mode === 'AR' ? ['add', 'sum'] : ['times', 'multiply'],
+          partners: [],
+          difficulty: 'easy',
+          difficultyWeight: 1,
+          solveSteps: mode === 'AR' ? ['15 + 25 = 40'] : ['7 × 6 = 42'],
+          answer: mode === 'AR' ? 40 : 42,
+          choices: mode === 'AR' ? [40, 35, 45, 50] : [42, 36, 48, 40],
+          category: mode
+        }];
+      }
+
+      setQuestionBank(bank);
+      // Load first question after a short delay to ensure state is updated
+      setTimeout(() => {
+        if (bank.length > 0) {
+          const question = bank[0];
+          setQuestionBank(prev => prev.slice(1));
+
+          setCurrentQuestion(question);
+          setSelectedFormula("");
+          setShowResult(false);
+          setBreakdownStepsCompleted([]);
+          setStartTime(Date.now());
+
+          // Get formula options using decision engine
+          try {
+            const scoredFormulas = decideFormulas(question.text);
+            const options = scoredFormulas.slice(0, 4).map(sf => ({
+              id: sf.id,
+              label: sf.rule.label,
+              confidence: sf.confidence
+            }));
+            if (options.length === 0) {
+              setFormulaOptions([{ id: question.formulaId, label: question.formulaId, confidence: 1 }]);
+            } else setFormulaOptions(options);
+          } catch (error) {
+            setFormulaOptions([{ id: question.formulaId, label: "Unknown Formula", confidence: 1 }]);
+          }
+        }
+        setIsLoading(false);
+      }, 100);
+    })();
   }, [mode]);
 
-  const loadNextQuestion = () => {
+  const loadNextQuestion = async () => {
     let bank = [...questionBank];
     
-    if (bank.length === 0) {
-      // Generate more questions if needed
-      bank = batchGenerate(20, mode);
-      setQuestionBank(bank);
-    }
+  const ensureBatch = async () => {
+      if (bank.length === 0) {
+        try {
+          const more = await batchGenerateAI(20, mode, adaptiveModel, undefined, undefined, { persist: persistGenerated });
+          bank = more;
+          setQuestionBank(bank);
+        } catch (e) {
+          bank = batchGenerate(20, mode);
+          setQuestionBank(bank);
+        }
+      }
+    };
+
+  await ensureBatch();
     
     // Fallback: if still no questions, create a simple one
-    if (bank.length === 0) {
+  if (bank.length === 0) {
       bank = [{
         id: Date.now(), // Use timestamp for unique ID
         subject: mode,
@@ -144,12 +165,13 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
     
     if (bank.length > 0) {
       // Pick the first question
-      const question = bank[0];
+  const question = bank[0];
       setQuestionBank(bank.slice(1));
       
-      setCurrentQuestion(question);
-      setSelectedFormula("");
-      setShowResult(false);
+  setCurrentQuestion(question);
+  setSelectedFormula("");
+  setShowResult(false);
+  setBreakdownStepsCompleted([]);
       setStartTime(Date.now());
       
       // Get formula options using decision engine
@@ -161,19 +183,13 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
           confidence: sf.confidence
         }));
         
-        // Fallback: if no formula options, create basic ones
         if (options.length === 0) {
-          setFormulaOptions([
-            { id: question.formulaId, label: question.formulaId, confidence: 1 }
-          ]);
+          setFormulaOptions([{ id: question.formulaId, label: question.formulaId, confidence: 1 }]);
         } else {
           setFormulaOptions(options);
         }
       } catch (error) {
-        // Fallback options
-        setFormulaOptions([
-          { id: question.formulaId, label: "Unknown Formula", confidence: 1 }
-        ]);
+        setFormulaOptions([{ id: question.formulaId, label: "Unknown Formula", confidence: 1 }]);
       }
     }
   };
@@ -183,23 +199,31 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
   };
 
   const handleSubmit = () => {
-    if (!selectedFormula || !currentQuestion) return;
+  if (!currentQuestion) return;
 
     const endTime = Date.now();
     const timeTaken = endTime - startTime;
     setResponseTime(timeTaken);
 
-    const correct = selectedFormula === currentQuestion.formulaId;
-    setIsCorrect(correct);
-    setShowResult(true);
-    setQuestionCount(prev => prev + 1);
+  let correct = false;
+      if (isRecallMode) {
+        // Numeric recall check
+        const chosen = selectedAnswer;
+        correct = chosen !== null && String(chosen) === String(currentQuestion.answer);
+      } else {
+        if (!selectedFormula) return;
+        correct = selectedFormula === currentQuestion.formulaId;
+      }
+  setIsCorrect(correct);
+  setShowResult(true);
+  setQuestionCount(prev => prev + 1);
     
     if (correct) {
       setCorrectCount(prev => prev + 1);
     }
 
-    // Get explanation
-    const explanation = getFormulaExplanation(currentQuestion.formulaId);
+  // Get explanation — prefer built-in solve steps (AI or custom) then fallback to known formula explanation
+  const explanation = (currentQuestion.solveSteps && currentQuestion.solveSteps[0]) ? currentQuestion.solveSteps[0] : getFormulaExplanation(currentQuestion.formulaId);
     setExplanation(explanation);
 
     // Update user models
@@ -217,6 +241,30 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
 
     // Update adaptive model
     if (adaptiveModel) {
+    try {
+      const res = mastery.recordAttempt(currentQuestion.formulaId, correct, { isRecall: isRecallMode });
+      if (!correct) {
+        // if normal incorrect start or continue cycle
+        mastery.startCycle(currentQuestion.formulaId);
+        setCurrentCycleFormula(currentQuestion.formulaId);
+  const teach = getDeepTeaching(currentQuestion.formulaId);
+  const steps = (currentQuestion.solveSteps || teach.steps || []);
+  setBreakdownContent({ definition: teach.definition, steps: steps, tips: teach.tips });
+  setBreakdownStepsCompleted(steps.map(() => false));
+        setShowBreakdown(true);
+        setIsRecallMode(false);
+      } else if (res && (res as any).event === 'cycle_to_recall') {
+        setIsRecallMode(true);
+        setShowBreakdown(false);
+        setBreakdownStepsCompleted([]);
+      } else if (res && (res as any).event === 'recall_correct') {
+        // mastered
+        setIsRecallMode(false);
+        setShowBreakdown(false);
+        setCurrentCycleFormula(null);
+        setBreakdownStepsCompleted([]);
+      }
+    } catch (e) { }
       const updatedAdaptiveModel = handlePostAttempt(adaptiveModel, {
         qId: currentQuestion.id,
         formulaId: currentQuestion.formulaId,
@@ -232,9 +280,110 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
       // which appends to the canonical attempt log and updates model/state. Do not write to daily
       // training storage here to avoid counting Study Mode as a Daily Training session.
     }
+    // Mastery loop handling
+    try {
+      const res = mastery.recordAttempt(currentQuestion.formulaId, correct);
+      if (!correct) {
+        // start cycle for this formula
+        mastery.startCycle(currentQuestion.formulaId);
+        setCurrentCycleFormula(currentQuestion.formulaId);
+        const teach = getDeepTeaching(currentQuestion.formulaId);
+        const steps = (currentQuestion.solveSteps || teach.steps || []);
+        setBreakdownContent({ definition: teach.definition, steps: steps, tips: teach.tips });
+        setBreakdownStepsCompleted(steps.map(() => false));
+        setShowBreakdown(true);
+        setIsRecallMode(false);
+      } else if (res && (res as any).event === 'cycle_to_recall') {
+        // Enter recall test for formula
+        setIsRecallMode(true);
+        setShowBreakdown(false);
+        setBreakdownStepsCompleted([]);
+      } else if (res && (res as any).event === 'recall_correct') {
+        // mastered
+        setIsRecallMode(false);
+                setShowBreakdown(false);
+                setBreakdownStepsCompleted([]);
+        setCurrentCycleFormula(null);
+      }
+    } catch (e) {}
   };
 
   const handleNext = () => {
+    // If in a mastery cycle, prefer to generate a follow-up question for the same formula
+    if (currentCycleFormula) {
+      const st = mastery.get(currentCycleFormula);
+      if (st && st.inRecall) {
+        (async () => {
+          try {
+            const bank = await batchGenerateAI(1, mode, adaptiveModel, undefined, undefined, { persist: persistGenerated });
+            let q = bank && bank.length ? bank[0] : null;
+            if (!q || q.formulaId !== currentCycleFormula) {
+              const t = currentCycleFormula;
+              q = (mode === 'AR') ? generateARQuestion(t, 'medium') : generateMKQuestion(t, 'medium');
+            }
+            setCurrentQuestion(q as any);
+            setSelectedFormula('');
+            setShowResult(false);
+            setBreakdownStepsCompleted([]);
+            setStartTime(Date.now());
+            setIsLoading(false);
+            setShowBreakdown(false);
+          } catch (e) {
+            loadNextQuestion();
+          }
+        })();
+        return;
+      }
+      if (st && st.inCycle) {
+        (async () => {
+          try {
+            const prevQ = currentQuestion;
+            if (!prevQ) { loadNextQuestion(); return; }
+            const prevText = normalizeText(prevQ.text || '');
+            const prevAns = prevQ.answer;
+            let q: Question | null = null;
+            let attempts = 0;
+            while (attempts < 6 && !q) {
+              const more = await batchGenerateAI(1, mode, adaptiveModel, undefined, [prevText], { persist: persistGenerated, forceParaphrase: true });
+              const cand = more && more.length ? more[0] : null;
+              if (cand && cand.formulaId === currentCycleFormula && String(cand.answer) !== String(prevAns)) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(cand, prevIndex === -1 ? undefined : prevIndex);
+                break;
+              }
+              attempts++;
+            }
+            if (!q) {
+              let fallbackCandidate: Question | null = null; let tries = 0;
+              while (!fallbackCandidate && tries < 10) {
+                const deterministic = mode === 'AR' ? generateARQuestion(currentCycleFormula as any, 'medium') : generateMKQuestion(currentCycleFormula as any, 'medium');
+                if (String(deterministic.answer) !== String(prevAns)) fallbackCandidate = deterministic as any;
+                tries++;
+              }
+              if (fallbackCandidate) {
+                const prevIndex = (prevQ.choices || []).findIndex(c => String(c) === String(prevAns));
+                q = shuffleChoicesForQuestion(fallbackCandidate as any, prevIndex === -1 ? undefined : prevIndex);
+              }
+            }
+            if (q) {
+              setCurrentQuestion(q as any);
+              setSelectedFormula('');
+              setShowResult(false);
+              setBreakdownStepsCompleted([]);
+              setStartTime(Date.now());
+              setIsLoading(false);
+              setShowBreakdown(false);
+            } else {
+              loadNextQuestion();
+            }
+          } catch (e) {
+            loadNextQuestion();
+          }
+        })();
+        return;
+      }
+    }
+    // default behavior
     loadNextQuestion();
   };
 
@@ -307,6 +456,7 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
             </CardTitle>
             <CardDescription>
               Read the problem and select which formula or method should be used to solve it.
+              Problems are generated in real-time by the AI and adapt to your performance.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -316,24 +466,36 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
 
             {!showResult ? (
               <div className="space-y-4">
-                <p className="font-medium">Which formula applies to this problem?</p>
-                <RadioGroup value={selectedFormula} onValueChange={handleFormulaSelect}>
-                  {formulaOptions.map((option) => (
-                    <div key={option.id} className="flex items-center space-x-2">
-                      <RadioGroupItem value={option.id} id={option.id} />
-                      <Label htmlFor={option.id} className="cursor-pointer">
-                        {option.label}
-                      </Label>
-                      <Badge variant="secondary" className="text-xs">
-                        {Math.round(option.confidence * 100)}%
-                      </Badge>
-                    </div>
-                  ))}
-                </RadioGroup>
+                {isRecallMode ? (
+                  <>
+                    <p className="font-medium">Solve the problem — pick the correct answer</p>
+                    <RadioGroup value={selectedAnswer !== null ? String(selectedAnswer) : ""} onValueChange={(v) => setSelectedAnswer(v === "" ? null : (Number(v) || v))}>
+                      {currentQuestion.choices.map((c, i) => (
+                        <div key={i} className="flex items-center space-x-2">
+                          <RadioGroupItem value={String(c)} id={`choice-${i}`} />
+                          <Label htmlFor={`choice-${i}`} className="cursor-pointer">{c}</Label>
+                        </div>
+                      ))}
+                    </RadioGroup>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">Which formula applies to this problem?</p>
+                    <RadioGroup value={selectedFormula} onValueChange={handleFormulaSelect}>
+                      {formulaOptions.map((option) => (
+                        <div key={option.id} className="flex items-center space-x-2">
+                          <RadioGroupItem value={option.id} id={option.id} />
+                          <Label htmlFor={option.id} className="cursor-pointer">{option.label}</Label>
+                          <Badge variant="secondary" className="text-xs">{Math.round(option.confidence * 100)}%</Badge>
+                        </div>
+                      ))}
+                    </RadioGroup>
+                  </>
+                )}
 
                 <Button 
                   onClick={handleSubmit} 
-                  disabled={!selectedFormula}
+                  disabled={(isRecallMode ? (selectedAnswer === null) : (!selectedFormula)) || showBreakdown}
                   className="w-full"
                 >
                   Submit Answer
@@ -371,6 +533,44 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
                   </div>
                 )}
 
+                {showBreakdown && breakdownContent && (
+                  <div className="bg-white p-4 rounded-lg border mt-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-medium text-gray-900">Detailed Breakdown</p>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm text-gray-600">{breakdownStepsCompleted.filter(Boolean).length} / {(currentQuestion.solveSteps || breakdownContent.steps || []).length}</div>
+                      </div>
+                    </div>
+                    <div className="mb-2"><strong>Correct Answer:</strong> {currentQuestion.answer}</div>
+                    <div className="mb-2"><strong>Definition:</strong> {breakdownContent.definition}</div>
+                    <div className="mb-2">
+                      <strong>Step-by-step solution:</strong>
+                      <ol className="ml-4 list-decimal">
+                        {(currentQuestion.solveSteps || breakdownContent.steps || []).map((s, i) => (
+                          <li key={i} className="text-sm text-gray-700 flex items-center gap-2">
+                            <Checkbox checked={!!breakdownStepsCompleted[i]} onCheckedChange={(v) => {
+                              setBreakdownStepsCompleted(prev => {
+                                const out = [...prev];
+                                out[i] = !!v;
+                                return out;
+                              });
+                            }} />
+                            <span>{s}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                    {breakdownContent.tips && breakdownContent.tips.length > 0 && (
+                      <div className="mb-2">
+                        <strong>How to identify this formula quickly:</strong>
+                        <ul className="ml-4 list-disc text-sm text-gray-700">
+                          {breakdownContent.tips.map((t, i) => <li key={i}>{t}</li>)}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between text-sm text-gray-600">
                   <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4" />
@@ -381,7 +581,7 @@ export default function StudyMode({ mode, onExit }: StudyModeProps) {
                   </div>
                 </div>
 
-                <Button onClick={handleNext} className="w-full">
+                <Button onClick={handleNext} className="w-full" disabled={showBreakdown && breakdownStepsCompleted.length > 0 && !breakdownStepsCompleted.every(Boolean)}>
                   Next Question
                 </Button>
               </div>
