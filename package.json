@@ -1,4 +1,5 @@
 {
+  "homepage": "https://relie28.github.io/ASVAB-PREP",
   "name": "asvab-tutor",
   "version": "0.1.0",
   "private": true,
@@ -10,7 +11,8 @@
     "build": "next build",
     "dev:poll": "CHOKIDAR_USEPOLLING=1 next dev -p 3000",
     "export": "next build && next export",
-    "deploy:gh-pages": "npm run export && npx gh-pages -d out",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build",
     "serve:out": "npx serve out -s -l 8080",
     "lint": "next lint",
     "smoke:test": "tsx scripts/smoke_dedupe.ts",
