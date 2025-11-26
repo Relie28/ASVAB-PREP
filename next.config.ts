@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // Static export: builds a purely static `out/` directory suitable for GitHub Pages
+  output: "export",
   /* config options here */
   typescript: {
     ignoreBuildErrors: true,
