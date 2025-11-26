@@ -26,6 +26,26 @@ jobs:
         run: |
           # Try a clean install using the lockfile for determinism; fall back to npm install if the lockfile is inconsistent
           npm ci || npm install
+      - name: Rebuild native modules (ensure prebuilt binaries are present)
+        run: |
+          # Rebuild native modules and specifically rebuild lightningcss if needed
+          npm rebuild || true
+          npx npm-rebuild || true
+          node -e "try{require('child_process').execSync('npm rebuild lightningcss --build-from-source',{stdio:'inherit'});}catch(e){}"
+      - name: Install Rust toolchain (for building lightningcss if needed)
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt
+      - name: Install build-essential for native builds (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Debug: list lightningcss artifacts
+        run: |
+          echo "Listing lightningcss node modules and files:"
+          ls -la node_modules | grep lightningcss || true
+          ls -la node_modules/lightningcss* || true
 
       - name: Build and export static site
         run: npm run export
