@@ -92,6 +92,27 @@ The dashboard should also keep track of the user's current difficulty level base
 - Problems are generated adaptively in real time and prioritized toward topics where numerical mastery is low, starting at an easier difficulty and increasing difficulty as the user answers correctly.
 - To override the AI endpoint (for local dev or alternate providers), set `localStorage.setItem('ai_endpoint', '<your-endpoint-url>')` in the browser console. The app will prefer that endpoint when present.
 
+## Deploying to GitHub Pages
+
+This repository includes a workflow which builds the site and deploys a static export to the `gh-pages` branch.
+
+How it works:
+
+- A GitHub Actions workflow (at `.github/workflows/deploy-gh-pages.yml`) runs on pushes to `main` and builds a static export via `next export`.
+- The export directory `out/` is published to the `gh-pages` branch using `peaceiris/actions-gh-pages`.
+
+To enable GitHub Pages for this repo:
+
+1. Open the repository Settings → Pages and set the source to the `gh-pages` branch and the root directory `/`.
+2. If you use a custom domain, configure the CNAME as needed and set your domain in the Pages settings.
+3. The action will publish the site to: `https://<your-org-or-username>.github.io/<your-repo>/` unless you set a custom domain.
+
+Notes:
+
+- Next.js static export (`next export`) will only produce a fully static site if your app does not depend on server-only features (API routes, server-side rendering, Next.js App Router server patterns). If your app uses server features, consider deploying with Vercel or a Node host (e.g. Railway, Render).
+- If `next export` cannot produce a static export for all routes due to dynamic server requirements, the workflow will still export static pages it can generate; other routes may need an alternative host.
+- If you prefer to manually deploy or run the deploy locally, the package.json includes `npm run export` to build the static files and `npm run deploy:gh-pages` to deploy via the `gh-pages` CLI.
+
 ## AI Settings & Debugging
 
 - A new Settings dialog allows users to opt-in or out of client-side AI generation and to save that preference to their user profile. The setting is persisted to localStorage (`ai_enabled`) and optionally to the user model.
