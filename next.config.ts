@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
+  // For GitHub Pages static hosting we need a static HTML export.
+  // Next.js removed `next export` in v15 — enable `output: 'export'` so
+  // `next build` produces a static `out/` directory suitable for Pages.
+  output: "export",
   /* config options here */
   typescript: {
     ignoreBuildErrors: true,
