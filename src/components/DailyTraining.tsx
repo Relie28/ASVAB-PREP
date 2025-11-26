@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import { Target, ArrowLeft, Lightbulb } from "lucide-react";
+import { Target, ArrowLeft, Lightbulb, Timer } from "lucide-react";
 // Removed react-icons import, using lucide-react Lightbulb for both places
 import { batchGenerate, batchGenerateAI, Question, generateARQuestion, generateMKQuestion, shuffleChoicesForQuestion } from "@/lib/question-generator";
 import { normalizeText } from '@/ai/duplicates';
@@ -479,6 +479,12 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
     return { attempted, total: questions.length };
   }, [answers, questions]);
 
+  function formatTime(sec: number) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${String(m)}:${String(s).padStart(2, '0')}`;
+  }
+
   if (sessionResults) {
     // Results view after session ends
     const { attempted, correct, streak, perQuestionResults, streakAwarded } = sessionResults;
@@ -617,6 +623,16 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
                   </div>
                   <Progress value={Math.round((progress.attempted / Math.max(1, progress.total)) * 100)} className="h-2" />
                 </div>
+                {/* Session timer indicator */}
+                {allowedToStart && questions.length > 0 && (
+                  <div className="ml-4 text-right w-40">
+                    <div className="text-sm text-gray-600 flex items-center justify-end gap-2">
+                      <Timer className="w-4 h-4" />
+                      <span>Time left</span>
+                    </div>
+                    <div className="font-medium text-sm text-right">{formatTime(remainingSeconds)}</div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
