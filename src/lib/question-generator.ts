@@ -1,7 +1,23 @@
 // Question Generator for ASVAB AR and MK questions
 import { Rule, RULES } from './rules';
 import { normalizeText, isDuplicate, structuralSignature, tokenFingerprint } from '@/ai/duplicates';
-import canonicalStore from './canonical-store';
+// NOTE: canonicalStore performs server-side file I/O and must not be imported
+// at top-level into client bundles. We lazy-load it only in server-executed
+// async functions to avoid bundler and lint issues.
+let _canonicalStore: any | null = null;
+async function getCanonicalStore() {
+  if (_canonicalStore) return _canonicalStore;
+  if (typeof window !== 'undefined') return null;
+  try {
+    // Use a dynamic path string to prevent static analyzers/bundlers from
+    // eagerly including the server-only `canonical-store` module in client builds.
+    const mod = await import('./' + 'canonical-store');
+    _canonicalStore = (mod && (mod.default || mod));
+    return _canonicalStore;
+  } catch (e) {
+    return null;
+  }
+}
 import generateProblem, { generateQuestionObject, purgeSessionCache } from '@/ai/generateProblem';
 import { getRecommendedDifficultyForCategory, registerQuestion, saveAdaptiveUserModel } from './adaptive-engine';
 
@@ -685,6 +701,7 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
   const seen = new Set<string>();
   const seenSigs = new Set<string>();
   const seenFingers = new Set<string>();
+  const canonicalStore = await getCanonicalStore();
   // helper to yield occasionally so long-running loops don't block main thread
   async function maybeYield(i: number) { if (i % 20 === 0) await new Promise(r => setTimeout(r, 0)); }
   for (let i = 0; i < n; i++) {
@@ -867,6 +884,7 @@ export async function generateFullTestAI(model: any = null, opts: { timeoutMs?: 
       curriculum.mixedRatio = Math.max(0.05, 1 - (curriculum.targetRatio + curriculum.reinforceRatio));
     }
   } catch (e) {}
+  const canonicalStore = await getCanonicalStore();
 
   const globalExclusion: string[] = [];
   let controller: AbortController | null = null;
@@ -1087,6 +1105,7 @@ export async function backgroundRefineFullTest(arQuestions: Question[], mkQuesti
   // Lightweight refinement: quick deterministic replacements to remove structural duplicates,
   // without calling heavy AI endpoints. Runs cooperatively and returns quickly.
   try {
+  const canonicalStore = await getCanonicalStore();
   const maxAttemptsPerReplacement = 12;
     const start = Date.now();
     const deadline = opts.timeoutMs ? (start + opts.timeoutMs) : (start + 30000);

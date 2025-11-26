@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 // Avoid importing Node-only modules at top-level. This file is imported from both
 // server and client bundles; importing 'fs' or 'path' at module load time causes
 // bundlers to fail when used in client components. We dynamically import
@@ -9,8 +10,8 @@ function ensureStoreSync() {
   // no-op in client browsers
   if (typeof window !== 'undefined') return;
   try {
-    const fs = require('fs');
-    const path = require('path');
+    const fs = eval("require('fs')");
+    const path = eval("require('path')");
     const dir = path.dirname(STORE_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     if (!fs.existsSync(STORE_PATH)) fs.writeFileSync(STORE_PATH, JSON.stringify([]));
@@ -32,7 +33,7 @@ export function loadSignatures(): CanonicalStore {
     if (typeof window !== 'undefined') return { structural: [], fingerprint: [], text: [], embeddings: [] };
     // For server runs ensure store exists and read file
     ensureStoreSync();
-    const fs = require('fs');
+    const fs = eval("require('fs')");
     const raw = fs.readFileSync(STORE_PATH, 'utf8');
     const parsed = JSON.parse(raw || '{}');
     if (Array.isArray(parsed)) {
@@ -58,13 +59,13 @@ export function addSignatures(sigs: string[] = [], type: 'structural' | 'fingerp
     // Skip on client
     if (typeof window !== 'undefined') return false;
     // ensure store exists on server
-    require('fs'); // exist check; ensureStore is async, but we keep simple here
+    eval("require('fs')"); // exist check; ensureStore is async, but we keep simple here
     const curr = loadSignatures();
     const existing = new Set(curr[type] || []);
     for (const s of sigs) existing.add(s);
     curr[type] = Array.from(existing);
     // also keep other arrays as-is
-    const fs = require('fs');
+    const fs = eval("require('fs')");
     fs.writeFileSync(STORE_PATH, JSON.stringify(curr));
     return true;
   } catch (e) { return false; }
@@ -76,7 +77,7 @@ export function addEmbeddings(newEmbeddings: number[][] = []) {
     const curr = loadSignatures();
     const old = curr.embeddings || [];
     curr.embeddings = old.concat(newEmbeddings);
-    const fs = require('fs');
+    const fs = eval("require('fs')");
     fs.writeFileSync(STORE_PATH, JSON.stringify(curr));
     return true;
   } catch (e) { return false; }
