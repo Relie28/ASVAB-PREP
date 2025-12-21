@@ -3,7 +3,7 @@ import { Question } from './question-generator';
 
 export interface QuestionResult {
   id: number;
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master';
   difficultyWeight: number;
   correct: boolean;
   timeMs?: number;
@@ -66,30 +66,23 @@ export function computeScaledScore(results: QuestionResult[]): number {
 }
 
 // VE probe scoring
-export function computeVEScore(correctAnswers: number, totalQuestions: number = 10): number {
-  if (totalQuestions === 0) return 50; // Default if no VE data
-  const ratio = correctAnswers / totalQuestions;
-  return Math.round(ratio * 99);
-}
+// VE probe removed; VE estimated directly from WK/PC performance in full test
 
 // Compute composite and map to percentile AFQT
 export function predictAFQT(
   arResults: QuestionResult[],
   mkResults: QuestionResult[],
-  veScore?: number
+  veEstimate?: number
 ): ScaledScores {
   // Calculate scaled scores
   const AR_scaled = computeScaledScore(arResults);
   const MK_scaled = computeScaledScore(mkResults);
   
-  // Estimate VE if not provided
-  let VE_estimated = veScore || 50; // Default to average if no VE data
-  
-  // If we have AR performance, we can make a better VE estimate
-  // (Good math skills often correlate with verbal skills)
-  if (arResults.length > 0 && !veScore) {
+  // Estimate VE: prefer an explicit estimate if provided (from WK/PC); otherwise fallback to AR-based heuristic
+  let VE_estimated = typeof veEstimate === 'number' ? veEstimate : 50;
+  if (typeof veEstimate !== 'number' && arResults.length > 0) {
     const arMastery = computeScaledScore(arResults) / 99;
-    // Adjust VE estimate based on AR performance with some noise
+    // AR-based heuristic fallback (small adjustment)
     VE_estimated = Math.round(50 + (arMastery - 0.5) * 30 + (Math.random() - 0.5) * 10);
     VE_estimated = Math.max(0, Math.min(99, VE_estimated));
   }
@@ -123,7 +116,10 @@ export function calculatePredictedASVABScore(
   arAnswers: (number | string | null)[],
   mkQuestions: Question[],
   mkAnswers: (number | string | null)[],
-  veProbeResults?: boolean[]
+  wkQuestions?: Question[],
+  wkAnswers?: (number | string | null)[],
+  pcQuestions?: Question[],
+  pcAnswers?: (number | string | null)[]
 ): {
   scaledScores: ScaledScores;
   arResults: QuestionResult[];
@@ -153,11 +149,19 @@ export function calculatePredictedASVABScore(
     correct: mkAnswers[i] === q.answer
   }));
   
-  // Calculate VE score if probe results provided
+  // Estimate VE from WK/PC if provided
   let veScore: number | undefined;
-  if (veProbeResults) {
-    const veCorrect = veProbeResults.filter(r => r).length;
-    veScore = computeVEScore(veCorrect, veProbeResults.length);
+  let veCorrectCount: number | undefined;
+  let veTotalCount: number | undefined;
+  if (wkQuestions && pcQuestions) {
+    const wkCorrect = wkQuestions.map((q, i) => (wkAnswers ? wkAnswers[i] === q.answer : false)).filter(Boolean).length;
+    const pcCorrect = pcQuestions.map((q, i) => (pcAnswers ? pcAnswers[i] === q.answer : false)).filter(Boolean).length;
+    const wkRatio = wkQuestions.length ? wkCorrect / wkQuestions.length : 0;
+    const pcRatio = pcQuestions.length ? pcCorrect / pcQuestions.length : 0;
+    const veRatio = (0.4 * wkRatio) + (0.6 * pcRatio);
+    veScore = Math.round(Math.max(0, Math.min(99, veRatio * 99)));
+    veCorrectCount = Math.round(veRatio * 10);
+    veTotalCount = 10;
   }
   
   // Get predicted AFQT
@@ -169,9 +173,9 @@ export function calculatePredictedASVABScore(
     arTotal: arResults.length,
     mkCorrect: mkResults.filter(r => r.correct).length,
     mkTotal: mkResults.length,
-    ...(veProbeResults && {
-      veCorrect: veProbeResults.filter(r => r).length,
-      veTotal: veProbeResults.length
+    ...(typeof veCorrectCount === 'number' && {
+      veCorrect: veCorrectCount,
+      veTotal: veTotalCount
     })
   };
   
@@ -189,7 +193,10 @@ export function generateScoreReport(
   arAnswers: (number | string | null)[],
   mkQuestions: Question[],
   mkAnswers: (number | string | null)[],
-  veProbeResults?: boolean[]
+  wkQuestions?: Question[],
+  wkAnswers?: (number | string | null)[],
+  pcQuestions?: Question[],
+  pcAnswers?: (number | string | null)[]
 ): {
   summary: ScaledScores;
   breakdown: {
@@ -209,7 +216,7 @@ export function generateScoreReport(
   strongAreas: string[];
 } {
   const { scaledScores, breakdown } = calculatePredictedASVABScore(
-    arQuestions, arAnswers, mkQuestions, mkAnswers, veProbeResults
+    arQuestions, arAnswers, mkQuestions, mkAnswers, wkQuestions, wkAnswers, pcQuestions, pcAnswers
   );
   
   // Calculate percentages
@@ -297,19 +304,27 @@ export function runSyntheticTestHarness(numUsers: number = 1000): number[] {
     const veAccuracy = Math.random();
     
     // Generate synthetic question results
-    const arResults: QuestionResult[] = Array(120).fill(null).map(() => ({
-      id: Math.random(),
-      difficulty: ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard',
-      difficultyWeight: Math.random() > 0.66 ? 3 : Math.random() > 0.33 ? 2 : 1,
-      correct: Math.random() < arAccuracy
-    }));
+    const arResults: QuestionResult[] = Array(120).fill(null).map(() => {
+      const diffs: Array<'easy'|'medium'|'hard'|'very-hard'|'master'> = ['easy','medium','hard','very-hard','master'];
+      const d = diffs[Math.floor(Math.random() * diffs.length)];
+      return {
+        id: Math.random(),
+        difficulty: d,
+        difficultyWeight: d === 'easy' ? 1 : d === 'medium' ? 2 : d === 'hard' ? 3 : d === 'very-hard' ? 4 : 5,
+        correct: Math.random() < arAccuracy
+      } as QuestionResult;
+    });
     
-    const mkResults: QuestionResult[] = Array(120).fill(null).map(() => ({
-      id: Math.random(),
-      difficulty: ['easy', 'medium', 'hard'][Math.floor(Math.random() * 3)] as 'easy' | 'medium' | 'hard',
-      difficultyWeight: Math.random() > 0.66 ? 3 : Math.random() > 0.33 ? 2 : 1,
-      correct: Math.random() < mkAccuracy
-    }));
+    const mkResults: QuestionResult[] = Array(120).fill(null).map(() => {
+      const diffs: Array<'easy'|'medium'|'hard'|'very-hard'|'master'> = ['easy','medium','hard','very-hard','master'];
+      const d = diffs[Math.floor(Math.random() * diffs.length)];
+      return {
+        id: Math.random(),
+        difficulty: d,
+        difficultyWeight: d === 'easy' ? 1 : d === 'medium' ? 2 : d === 'hard' ? 3 : d === 'very-hard' ? 4 : 5,
+        correct: Math.random() < mkAccuracy
+      } as QuestionResult;
+    });
     
     const veScore = computeVEScore(Math.floor(veAccuracy * 10), 10);
     const prediction = predictAFQT(arResults, mkResults, veScore);

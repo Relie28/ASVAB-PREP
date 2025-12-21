@@ -18,7 +18,7 @@ export interface AdaptiveConfig {
 export interface QuestionPoolEntry {
   formulaId: string;
   category: 'AR' | 'MK';
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master';
   difficultyWeight: number;
   timesSeen: number;
   lastSeen: number | null;
@@ -148,7 +148,7 @@ export function recordAttempt(
     qId?: number;
     correct: boolean;
     timeMs: number;
-    difficulty: 'easy' | 'medium' | 'hard';
+    difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master';
     source?: string; // optional origin string (live, synthetic, backfill, study, full_test)
   }
 ): AdaptiveUserModel {
@@ -410,7 +410,7 @@ export function getUserDifficultyFromAttemptLog(days: number = 30): 'Easy' | 'In
 }
 
 // Recommend difficulty for a category using category mastery and recent performance
-export function getRecommendedDifficultyForCategory(model: AdaptiveUserModel | null, category: 'AR' | 'MK'): 'easy' | 'medium' | 'hard' {
+export function getRecommendedDifficultyForCategory(model: AdaptiveUserModel | null, category: 'AR' | 'MK'): 'easy' | 'medium' | 'hard' | 'very-hard' | 'master' {
   try {
     const mdl = model || loadAdaptiveUserModel();
     const stats = (mdl && mdl.statsByCategory && mdl.statsByCategory[category]) || null;
@@ -418,9 +418,10 @@ export function getRecommendedDifficultyForCategory(model: AdaptiveUserModel | n
     if (!stats || (stats.attempts || 0) < 5) return 'easy';
     const mastery = stats.correct / stats.attempts;
     const ewma = (stats as any)?.ewma || mastery;
-    // Use scaled rules
-    if (ewma >= 0.86) return 'hard';
-    if (ewma >= 0.65) return 'medium';
+    if (ewma >= 0.94) return 'master';
+    if (ewma >= 0.86) return 'very-hard';
+    if (ewma >= 0.72) return 'hard';
+    if (ewma >= 0.55) return 'medium';
     return 'easy';
   } catch (e) {
     return 'easy';
@@ -450,9 +451,11 @@ function adjustWeights(model: AdaptiveUserModel, formulaId: string): number {
 
 // Add question to pool
 export function registerQuestion(model: AdaptiveUserModel, q: Question): void {
+  // Adaptive question pool only tracks AR and MK categories
+  if (q.category !== 'AR' && q.category !== 'MK') return;
   model.questionPool[q.id] = {
     formulaId: q.formulaId,
-    category: q.category,
+    category: q.category as 'AR' | 'MK',
     difficulty: q.difficulty,
     difficultyWeight: q.difficultyWeight,
     timesSeen: 0,
@@ -548,24 +551,22 @@ export function adjustDifficultyOnStreak(model: AdaptiveUserModel, qId: number):
   if (!s) return;
   
   const cfg = model.engineConfig;
-  
-  // Bump up difficulty after success streak
-  if (s.streak >= cfg.upStreakThreshold && q.difficulty === 'easy') {
-    q.difficulty = 'medium';
-    q.difficultyWeight = 2;
-  } else if (s.streak >= cfg.upStreakThreshold + 2 && q.difficulty === 'medium') {
-    q.difficulty = 'hard';
-    q.difficultyWeight = 3;
+  // Bump up or down difficulty after streaks (supporting extended tier list)
+  const tiers = ['easy','medium','hard','very-hard','master'];
+  const weights: Record<string, number> = { easy: 1, medium: 2, hard: 3, 'very-hard': 4, master: 5 };
+  let idx = tiers.indexOf(q.difficulty as any);
+  if (s.streak >= cfg.upStreakThreshold + 2) {
+    idx = Math.min(idx + 2, tiers.length - 1);
+  } else if (s.streak >= cfg.upStreakThreshold) {
+    idx = Math.min(idx + 1, tiers.length - 1);
   }
-  
-  // Degrade difficulty on failure streak
-  if (s.streak <= cfg.downStreakThreshold && q.difficulty === 'hard') {
-    q.difficulty = 'medium';
-    q.difficultyWeight = 2;
-  } else if (s.streak <= cfg.downStreakThreshold - 1 && q.difficulty === 'medium') {
-    q.difficulty = 'easy';
-    q.difficultyWeight = 1;
+  if (s.streak <= cfg.downStreakThreshold - 1) {
+    idx = Math.max(idx - 2, 0);
+  } else if (s.streak <= cfg.downStreakThreshold) {
+    idx = Math.max(idx - 1, 0);
   }
+  q.difficulty = tiers[idx] as any;
+  q.difficultyWeight = weights[q.difficulty];
 }
 
 // Handle post-attempt logic
@@ -577,7 +578,7 @@ export function handlePostAttempt(
     category: 'AR' | 'MK';
     correct: boolean;
     timeMs: number;
-    difficulty: 'easy' | 'medium' | 'hard';
+    difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master';
     source?: string;
   }
 ): AdaptiveUserModel {

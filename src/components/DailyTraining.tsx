@@ -213,14 +213,17 @@ export default function DailyTraining({ onExit }: { onExit?: () => void }) {
     try {
       const q = questions[currentIdx];
       if (q) {
-        handlePostAttempt(loadAdaptiveUserModel(), {
-          qId: q.id,
-          formulaId: q.formulaId,
-          category: q.category,
-          correct: choice !== null && isAnswerCorrect(q.answer, choice),
-          timeMs: nextResponseTimes[currentIdx] || 0,
-          difficulty: q.difficulty
-        , source: 'live' });
+        if (q.category === 'AR' || q.category === 'MK') {
+          handlePostAttempt(loadAdaptiveUserModel(), {
+            qId: q.id,
+            formulaId: q.formulaId,
+            category: q.category,
+            correct: choice !== null && isAnswerCorrect(q.answer, choice),
+            timeMs: nextResponseTimes[currentIdx] || 0,
+            difficulty: q.difficulty,
+            source: 'live'
+          });
+        }
         // notify listeners (Dashboard) that adaptive model changed
         try { window.dispatchEvent(new CustomEvent('adaptiveModelUpdated')); } catch (e) {}
       }

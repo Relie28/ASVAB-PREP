@@ -19,26 +19,29 @@ async function getCanonicalStore() {
   }
 }
 import generateProblem, { generateQuestionObject, purgeSessionCache } from '@/ai/generateProblem';
+import asvabBank from './asvab_bank';
 import { getRecommendedDifficultyForCategory, registerQuestion, saveAdaptiveUserModel } from './adaptive-engine';
 
 export interface Question {
   id: number;
-  subject: 'AR' | 'MK';
+  subject: 'AR' | 'MK' | 'GS' | 'WK' | 'PC' | 'MIXED';
   type: string;
   text: string;
   formulaId: string;
   keywords: string[];
   partners: string[];
-  difficulty: 'easy' | 'medium' | 'hard';
+  difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master';
   difficultyWeight: number;
   solveSteps: string[];
   answer: number | string;
   choices: (number | string)[];
-  category: 'AR' | 'MK';
+  category: 'AR' | 'MK' | 'GS' | 'WK' | 'PC' | 'MIXED';
 }
 
-// Difficulty to weight mapping
-const DIFFICULTY_WEIGHT = { easy: 1, medium: 2, hard: 3 };
+// Difficulty to weight mapping (extended)
+const DIFFICULTY_WEIGHT: Record<string, number> = { easy: 1, medium: 2, hard: 3, 'very-hard': 4, master: 5 };
+
+const rankDifficulty = (d: string) => (d === 'easy' ? 0 : (d === 'medium' ? 1 : (d === 'hard' ? 2 : (d === 'very-hard' ? 3 : 4))));
 
 // Small deterministic id counter
 let _qid = 1000;
@@ -51,7 +54,7 @@ function pick<T>(arr: T[], i = 0): T { return arr[i % arr.length]; }
 async function maybeYield(i: number) { if (i % 20 === 0) await new Promise(r => setTimeout(r, 0)); }
 
 // AR generator: returns question object
-export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' | 'hard' = 'easy'): Question {
+export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master' = 'easy'): Question {
   const w = DIFFICULTY_WEIGHT[difficulty];
   const id = nextId();
   
@@ -91,8 +94,8 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
       return qobj as any;
     }
     case "rate_distance": {
-  const r = difficulty === 'hard' ? (50 + Math.floor(Math.random()*21)) : (20 + Math.floor(Math.random()*21)); // 20-40 vs 50-70
-  const t = difficulty === 'hard' ? (2 + Math.floor(Math.random()*3)) : (1 + Math.floor(Math.random()*2)); // hours
+  const r = rankDifficulty(difficulty) === 2 ? (50 + Math.floor(Math.random()*21)) : (rankDifficulty(difficulty) === 3 ? (70 + Math.floor(Math.random()*31)) : (rankDifficulty(difficulty) === 4 ? (100 + Math.floor(Math.random()*51)) : (20 + Math.floor(Math.random()*21)))); // ranges scale by tier
+  const t = rankDifficulty(difficulty) >= 2 ? (2 + Math.floor(Math.random()*3)) : (1 + Math.floor(Math.random()*2)); // hours
   const text = `A car travels at ${r} miles per hour for ${t} hours. How far does it travel?`;
   const answer = r * t;
         const qobj = {
@@ -110,8 +113,8 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 
     case "work_combined": {
-      const t1 = difficulty === 'hard' ? (10 + Math.floor(Math.random()*8)) : (4 + Math.floor(Math.random()*6));
-      const t2 = difficulty === 'hard' ? (6 + Math.floor(Math.random()*6)) : (5 + Math.floor(Math.random()*7));
+      const t1 = rankDifficulty(difficulty) === 2 ? (10 + Math.floor(Math.random()*8)) : (rankDifficulty(difficulty) === 3 ? (14 + Math.floor(Math.random()*8)) : (rankDifficulty(difficulty) === 4 ? (18 + Math.floor(Math.random()*12)) : (4 + Math.floor(Math.random()*6))));
+      const t2 = rankDifficulty(difficulty) === 2 ? (6 + Math.floor(Math.random()*6)) : (rankDifficulty(difficulty) === 3 ? (8 + Math.floor(Math.random()*6)) : (rankDifficulty(difficulty) === 4 ? (12 + Math.floor(Math.random()*8)) : (5 + Math.floor(Math.random()*7))));
       const text = `Worker A can finish a job in ${t1} hours and Worker B in ${t2} hours. Working together, how long will they take (in hours)?`;
       const rate = 1/t1 + 1/t2;
       const answer = +(1 / rate).toFixed(2);
@@ -130,8 +133,8 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 
     case "percent_basic": {
-      const whole = difficulty === 'hard' ? (200 + Math.floor(Math.random()*201)) : (30 + Math.floor(Math.random()*71));
-      const pct = difficulty === 'hard' ? (10 + Math.floor(Math.random()*41)) : (5 + Math.floor(Math.random()*26)); // %
+      const whole = rankDifficulty(difficulty) === 2 ? (200 + Math.floor(Math.random()*201)) : (rankDifficulty(difficulty) === 3 ? (500 + Math.floor(Math.random()*501)) : (rankDifficulty(difficulty) === 4 ? (1000 + Math.floor(Math.random()*2001)) : (30 + Math.floor(Math.random()*71))));
+      const pct = rankDifficulty(difficulty) >= 2 ? (10 + Math.floor(Math.random()*41)) : (5 + Math.floor(Math.random()*26)); // %
       const text = `${pct}% of ${whole} is what number?`;
       const answer = +(whole * (pct/100)).toFixed(2);
         const qobj = {
@@ -148,8 +151,8 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 
     case "ratio_proportion": {
-      const total = difficulty === 'hard' ? (60 + Math.floor(Math.random()*121)) : (20 + Math.floor(Math.random()*51));
-      const ratio = difficulty === 'hard' ? [3, 7] : [2, 3]; // vary ratios
+      const total = rankDifficulty(difficulty) === 2 ? (60 + Math.floor(Math.random()*121)) : (rankDifficulty(difficulty) === 3 ? (150 + Math.floor(Math.random()*201)) : (rankDifficulty(difficulty) === 4 ? (300 + Math.floor(Math.random()*501)) : (20 + Math.floor(Math.random()*51))));
+      const ratio = rankDifficulty(difficulty) >= 2 ? [3, 7] : [2, 3]; // vary ratios
       const text = `A quantity is divided in the ratio ${ratio[0]}:${ratio[1]}. If total is ${total}, what is the larger share?`;
       const share = total * (ratio[1]/(ratio[0] + ratio[1]));
       const answer = +(share).toFixed(2);
@@ -168,7 +171,7 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 
     case "average_mean": {
-      const scores = difficulty === 'hard' ? [85, 92, 78, 96, 88].map(x => x + Math.floor(Math.random()*5)) : [80, 85, 90].map(x => x + Math.floor(Math.random()*3));
+      const scores = rankDifficulty(difficulty) >= 2 ? [85, 92, 78, 96, 88].map(x => x + Math.floor(Math.random()*5)) : [80, 85, 90].map(x => x + Math.floor(Math.random()*3));
       const text = `Find the average of these scores: ${scores.join(', ')}`;
       const answer = scores.reduce((a, b) => a + b, 0) / scores.length;
         const qobj = {
@@ -185,7 +188,7 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 
     case "mode_of_set": {
-      const size = difficulty === 'hard' ? 7 : 5;
+      const size = rankDifficulty(difficulty) >= 2 ? 7 : 5;
       const base = 2 + Math.floor(Math.random() * 5);
       const mode = base + Math.floor(Math.random() * 3);
   const arr: number[] = [];
@@ -208,9 +211,9 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
 
     case "percent_multistep": {
       // Discount then tax or tax then discount
-      const price = difficulty === 'hard' ? (200 + Math.floor(Math.random()*300)) : (30 + Math.floor(Math.random()*120));
-      const disc = difficulty === 'hard' ? (15 + Math.floor(Math.random()*20)) : (5 + Math.floor(Math.random()*10));
-      const tax = difficulty === 'hard' ? (8 + Math.floor(Math.random()*10)) : (2 + Math.floor(Math.random()*5));
+      const price = rankDifficulty(difficulty) === 2 ? (200 + Math.floor(Math.random()*300)) : (rankDifficulty(difficulty) === 3 ? (400 + Math.floor(Math.random()*600)) : (rankDifficulty(difficulty) === 4 ? (800 + Math.floor(Math.random()*1200)) : (30 + Math.floor(Math.random()*120))));
+      const disc = rankDifficulty(difficulty) >= 2 ? (15 + Math.floor(Math.random()*20)) : (5 + Math.floor(Math.random()*10));
+      const tax = rankDifficulty(difficulty) >= 2 ? (8 + Math.floor(Math.random()*10)) : (2 + Math.floor(Math.random()*5));
       const afterDisc = +(price * (1 - disc/100)).toFixed(2);
       const afterTax = +((afterDisc) * (1 + tax/100)).toFixed(2);
       const text = `An item costs $${price}. It is first discounted by ${disc}%, and then a sales tax of ${tax}% is applied to the discounted price. What is the final price?`;
@@ -233,7 +236,7 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
     case "mixture": {
-      const total = difficulty === 'hard' ? 120 : 40;
+      const total = rankDifficulty(difficulty) >= 2 ? 120 : 40;
       const ratioA = 1 + Math.floor(Math.random()*3);
       const ratioB = 1 + Math.floor(Math.random()*3);
       const a = Math.round(total * (ratioA / (ratioA + ratioB)));
@@ -246,7 +249,7 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
     case "probability_basic": {
-      const total = difficulty === 'hard' ? 12 : 6;
+      const total = rankDifficulty(difficulty) >= 2 ? 12 : 6;
       const favourable = 1 + Math.floor(Math.random() * Math.min(3, total - 1));
       const text = `A bag contains ${total} marbles, ${favourable} of which are red. If one marble is drawn at random, what is the probability it is red?`;
       const answer = +(favourable / total).toFixed(3);
@@ -290,9 +293,9 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
     case "simple_interest": {
-      const principal = difficulty === 'hard' ? (3000 + Math.floor(Math.random()*7001)) : (500 + Math.floor(Math.random()*3001));
-      const rate = difficulty === 'hard' ? (3 + Math.random()*6) : (4 + Math.random()*3); // %
-      const time = difficulty === 'hard' ? (3 + Math.floor(Math.random()*4)) : (1 + Math.floor(Math.random()*3)); // years
+      const principal = rankDifficulty(difficulty) === 2 ? (3000 + Math.floor(Math.random()*7001)) : (rankDifficulty(difficulty) === 3 ? (6000 + Math.floor(Math.random()*9001)) : (rankDifficulty(difficulty) === 4 ? (15000 + Math.floor(Math.random()*20001)) : (500 + Math.floor(Math.random()*3001))));
+      const rate = rankDifficulty(difficulty) >= 2 ? (3 + Math.random()*6) : (4 + Math.random()*3); // %
+      const time = rankDifficulty(difficulty) >= 2 ? (3 + Math.floor(Math.random()*4)) : (1 + Math.floor(Math.random()*3)); // years
       const text = `What is the simple interest on $${principal} at ${rate}% for ${time} years?`;
       const answer = +(principal * (rate/100) * time).toFixed(2);
         const qobj = {
@@ -325,7 +328,7 @@ export function generateARQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
   }
 }
-export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' | 'hard' = 'easy'): Question {
+export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' | 'hard' | 'very-hard' | 'master' = 'easy'): Question {
   const w = DIFFICULTY_WEIGHT[difficulty];
   const id = nextId();
   
@@ -398,7 +401,7 @@ export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
   case "volume_rect_prism": {
-      const l = difficulty === 'hard' ? (5 + Math.floor(Math.random()*8)) : (2 + Math.floor(Math.random()*4));
+      const l = rankDifficulty(difficulty) >= 2 ? (5 + Math.floor(Math.random()*8)) : (2 + Math.floor(Math.random()*4));
       const w2 = 1 + Math.floor(Math.random()*8); const h = 1 + Math.floor(Math.random()*6);
       const text = `Find the volume of a rectangular prism with length ${l}, width ${w2}, and height ${h}.`;
       const answer = l * w2 * h;
@@ -441,7 +444,7 @@ export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' |
       return qobj as any;
     }
     case "area_circle": {
-      const r = difficulty === 'hard' ? (5 + Math.floor(Math.random()*8)) : (2 + Math.floor(Math.random()*4));
+      const r = rankDifficulty(difficulty) >= 2 ? (5 + Math.floor(Math.random()*8)) : (2 + Math.floor(Math.random()*4));
       const text = `What is the area of a circle with radius ${r}? (Use π ≈ 3.1416)`;
       const answer = +(Math.PI * r * r).toFixed(3);
       const qobj = {
@@ -481,8 +484,8 @@ export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
     case "exponents_rules": {
-      const base = difficulty === 'hard' ? (3 + Math.floor(Math.random()*4)) : (2 + Math.floor(Math.random()*2));
-      const exp = difficulty === 'hard' ? (3 + Math.floor(Math.random()*4)) : (2 + Math.floor(Math.random()*3));
+      const base = rankDifficulty(difficulty) >= 2 ? (3 + Math.floor(Math.random()*4)) : (2 + Math.floor(Math.random()*2));
+      const exp = rankDifficulty(difficulty) >= 2 ? (3 + Math.floor(Math.random()*4)) : (2 + Math.floor(Math.random()*3));
       const text = `What is ${base} raised to the power of ${exp}?`;
       const answer = Math.pow(base, exp);
       return {
@@ -572,7 +575,7 @@ export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' |
     }
 
     case "median_mode": {
-      const arrSize = difficulty === 'hard' ? 9 : 5;
+      const arrSize = rankDifficulty(difficulty) >= 2 ? 9 : 5;
       const base = 1 + Math.floor(Math.random()*8);
       const arr = Array.from({ length: arrSize }, (_, i) => base + Math.floor(Math.random()*10));
       arr.sort((a,b)=>a-b);
@@ -641,12 +644,164 @@ export function generateMKQuestion(type: string, difficulty: 'easy' | 'medium' |
   }
 }
 
+// Ensure the question has a choices array that includes the correct answer.
+export function ensureChoicesIncludeAnswer(q: Question, avoidIndex?: number | null): Question {
+  try {
+    const out = { ...q } as Question;
+    out.choices = Array.isArray(out.choices) ? out.choices.slice() : [];
+    const ansStr = String(out.answer);
+    // If answer already present (loose equality), accept it
+    if (!out.choices.some(c => String(c) === ansStr)) {
+      out.choices.push(out.answer);
+    }
+    // Replace generic placeholder distractors (e.g., 'Other', 'Other1') with
+    // plausible distractors drawn from the same category bank or generated
+    // using context-aware heuristics where possible.
+    const placeholders = out.choices.map(c => typeof c === 'string' && /^Other/i.test(c));
+    const needs = Math.max(0, 4 - out.choices.length);
+
+    // Create distractor candidates using a context-aware generator
+    const generateDistractorsForQuestion = (qobj: Question, needed: number) => {
+      const res: any[] = [];
+      const cat = qobj.category;
+      const qtext = String(qobj.text || '').toLowerCase();
+
+      // Helper: sample from bank answers, excluding the correct answer and existing choices
+      const sampleFromBank = (count: number) => {
+        const bankAnswers = ((asvabBank as any)[cat] || []).map((x: any) => x.answer).filter((a: any) => String(a) !== ansStr && !out.choices.some(c => String(c) === String(a)));
+        while (res.length < count && bankAnswers.length) {
+          const pick = bankAnswers.splice(Math.floor(Math.random() * bankAnswers.length), 1)[0];
+          res.push(pick);
+        }
+      };
+
+      // Domain-specific heuristics
+      if (cat === 'GS') {
+        // If question mentions 'organ' or 'body', prefer organ-related distractors
+        const organs = ['Heart','Lungs','Brain','Kidney','Liver','Eye','Ear','Stomach','Skin'];
+        if (qtext.includes('organ') || qtext.includes('body') || qtext.includes('heart') || qtext.includes('lungs')) {
+          const orgs = organs.filter(o => String(o) !== ansStr && !out.choices.some(c => String(c) === String(o)));
+          while (res.length < needed && orgs.length) res.push(orgs.splice(Math.floor(Math.random() * orgs.length),1)[0]);
+        }
+        // Fill remaining from bank
+        sampleFromBank(needed);
+      } else if (cat === 'WK') {
+        // Vocabulary: use other WK answers as distractors
+        sampleFromBank(needed);
+      } else if (cat === 'PC') {
+        // Paragraph comprehension: use other passage answers or similar sentences
+        sampleFromBank(needed);
+      } else if (cat === 'AR' || cat === 'MK') {
+        // Numeric heuristics based on type
+        const n = Number(qobj.answer);
+        if (!Number.isNaN(n)) {
+          // Off-by-one, swapped digits, percent mistakes
+          const candSet = new Set<any>();
+          candSet.add(n + 1);
+          candSet.add(n - 1);
+          candSet.add(n + Math.max(2, Math.round(n * 0.1)));
+          // swapped digit heuristic
+          const s = String(Math.abs(n));
+          if (s.length >= 2) {
+            const swapped = Number(s.split('').reverse().join('')) * (n < 0 ? -1 : 1);
+            if (!Number.isNaN(swapped)) candSet.add(swapped);
+          }
+          candSet.delete(n);
+          const arr = Array.from(candSet).slice(0, needed);
+          while (res.length < needed && arr.length) res.push(arr.shift());
+        }
+        // If still short, sample from bank (answers that are numeric-like)
+        sampleFromBank(needed);
+      } else {
+        sampleFromBank(needed);
+      }
+
+      return res.slice(0, needed);
+    };
+
+    // Replace placeholders
+    for (let i = 0; i < out.choices.length; i++) {
+      if (typeof out.choices[i] === 'string' && /^Other/i.test(out.choices[i])) {
+        // Try to fill with a context-aware distractor
+        const candArr = generateDistractorsForQuestion(out, 1);
+        out.choices[i] = candArr[0] != null ? candArr[0] : `Option ${i + 1}`;
+      }
+    }
+
+    // Add additional choices if still short
+    const needed = Math.max(0, 4 - out.choices.length);
+    if (needed > 0) {
+      const more = generateDistractorsForQuestion(out, needed);
+      out.choices.push(...more);
+    }
+
+    // Ensure we only return 4 choices and that the correct answer is not placed
+    // at the avoidIndex if provided. We'll deterministically place the correct
+    // answer at a random index excluding avoidIndex and fill remaining slots
+    // with shuffled distractors.
+    const finalChoices = out.choices.slice(0, 4).map(c => c);
+    // Ensure uniqueness and preserve string/number types
+    const uniqueChoices: any[] = [];
+    for (const c of finalChoices) {
+      const s = String(c);
+      if (!uniqueChoices.some(u => String(u) === s)) uniqueChoices.push(c);
+    }
+    // If we have less than 4 unique, pad with generated distractors
+    let padIdx = 0;
+    const fallback = ['None of the above', 'Not applicable', 'All of the above', 'Unknown'];
+    while (uniqueChoices.length < 4) {
+      const more = generateDistractorsForQuestion(out, 1)[0] || fallback[padIdx % fallback.length];
+      padIdx++;
+      if (!uniqueChoices.some(u => String(u) === String(more))) uniqueChoices.push(more);
+    }
+
+    const answerVal = out.answer;
+    const distractors = uniqueChoices.filter(c => String(c) !== String(answerVal));
+
+    // Choose target index for the correct answer (0..3) excluding avoidIndex
+    const indices = [0,1,2,3].filter(i => (avoidIndex == null) || i !== avoidIndex);
+    const targetIndex = indices[Math.floor(Math.random() * indices.length)];
+
+    const arranged = new Array(4).fill(null);
+    arranged[targetIndex] = answerVal;
+
+    // Shuffle distractors and fill other positions
+    for (let i = distractors.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = distractors[i]; distractors[i] = distractors[j]; distractors[j] = tmp;
+    }
+    let di = 0;
+    for (let i = 0; i < 4; i++) {
+      if (arranged[i] == null) {
+        arranged[i] = distractors[di++] ?? fallback[(di - 1) % fallback.length];
+      }
+    }
+
+    out.choices = arranged;
+    return out;
+  } catch (e) { return q; }
+}
+
 // Batch generator
-export function batchGenerate(n: number = 10, subject: "AR" | "MK" = "AR"): Question[] {
+export function batchGenerate(n: number = 10, subject: "AR" | "MK" | "GS" | "WK" | "PC" = "AR"): Question[] {
   const out: Question[] = [];
+  // If subject corresponds to a predefined ASVAB bank, return the first n items in order (easiest→hardest)
+  if (subject === 'AR' || subject === 'MK' || subject === 'GS' || subject === 'WK' || subject === 'PC') {
+    let bank: Question[] = [];
+    if (subject === 'AR') bank = asvabBank.AR;
+    else if (subject === 'MK') bank = asvabBank.MK;
+    else if (subject === 'GS') bank = asvabBank.GS;
+    else if (subject === 'WK') bank = asvabBank.WK;
+    else bank = asvabBank.PC;
+    for (let i = 0; i < n; i++) {
+      out.push(bank[i % bank.length]);
+    }
+    return out;
+  }
+  // Fallback: previous randomized generation for AR/MK
   const arTypes = ["rate_distance", "work_combined", "percent_basic", "ratio_proportion", "average_mean", "simple_interest", "reading_table", "percent_multistep", "divide_simple", "mixture", "probability_basic"];
   const mkTypes = ["algebra_linear", "algebra_linear_word", "algebra_two_step", "algebra_distributive", "fraction_addsub", "fraction_mult", "fraction_divide", "pythagorean", "area_circle", "volume_rect_prism", "perimeter", "angles_basic", "decimal_ops", "exponents_rules", "algebra_two_step", "percentage_change", "unit_conversion", "systems_two_eqs", "polynomial_factor", "compound_interest", "median_mode"];
-  
+
   for (let i = 0; i < n; i++) {
     const difficulty = (i % 3 === 0) ? 'easy' : ((i % 3 === 1) ? 'medium' : 'hard');
     if (subject === "AR") {
@@ -679,7 +834,7 @@ export function shuffleChoicesForQuestion(q: Question, preventIndex?: number): Q
 }
 
 // Async batch generator using AI for unique, adaptive questions
-export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MIXED" = "AR", model: any = null, curriculum: { targetRatio?: number; reinforceRatio?: number; mixedRatio?: number } = {}, globalExclusion: string[] = [], opts: { signal?: AbortSignal; deadlineMs?: number; fastMode?: boolean; persist?: boolean; forceParaphrase?: boolean } = {}): Promise<Question[]> {
+export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MIXED" | "GS" | "WK" | "PC" = "AR", model: any = null, curriculum: { targetRatio?: number; reinforceRatio?: number; mixedRatio?: number } = {}, globalExclusion: string[] = [], opts: { signal?: AbortSignal; deadlineMs?: number; fastMode?: boolean; persist?: boolean; forceParaphrase?: boolean } = {}): Promise<Question[]> {
   if (opts.deadlineMs) (opts as any)._startTime = Date.now();
   const out: Question[] = [];
   const { targetRatio = 0.5, reinforceRatio = 0.3, mixedRatio = 0.2 } = curriculum;
@@ -693,11 +848,16 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
         const aiEnabled = localStorage.getItem('ai_enabled');
         if (aiEnabled === 'false') {
           // Return synchronous batch directly
-          return batchGenerate(n, subject === 'MIXED' ? 'AR' : (subject as 'AR' | 'MK'));
+          return batchGenerate(n, subject === 'MIXED' ? 'AR' : (subject as 'AR' | 'MK' | 'GS' | 'WK' | 'PC'));
         }
       }
     }
   } catch (e) {}
+  // If asking for a predefined bank, return ordered slice (easiest→hardest)
+  if (subject === 'AR' || subject === 'MK' || subject === 'GS' || subject === 'WK' || subject === 'PC') {
+    const bank = subject === 'AR' ? asvabBank.AR : (subject === 'MK' ? asvabBank.MK : (subject === 'GS' ? asvabBank.GS : (subject === 'WK' ? asvabBank.WK : asvabBank.PC)));
+    return bank.slice(0, n);
+  }
   const seen = new Set<string>();
   const seenSigs = new Set<string>();
   const seenFingers = new Set<string>();
@@ -731,8 +891,10 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
         recomm = getRecommendedDifficultyForCategory(model, subject as 'AR' | 'MK');
       }
     } catch (e) { recomm = 'easy'; }
-    // map to numeric difficulty used by generateProblem (1,2,3)
-    const diff = recomm === 'easy' ? 1 : (recomm === 'medium' ? 2 : 3);
+    // map to numeric difficulty used by generateProblem (1..5)
+    const diff = recomm === 'easy' ? 1 : (recomm === 'medium' ? 2 : (recomm === 'hard' ? 3 : (recomm === 'very-hard' ? 4 : 5)));
+      // normalize subject to string to satisfy TypeScript narrowing in mixed unions
+      const subj = subject as string;
     try {
       // pick a target formula to prioritize, based on mastery/weights
   let targetFormula: string | null = null;
@@ -750,7 +912,7 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
       } catch (e) { /* ignore analysis errors */ }
   // Occasionally or per mode, ask AI to produce a longer scenario problem (multi-step) to capture mixed scenario flows
   // Favor more scenario variation for MK questions to discourage short template-based MK items
-  const scenarioInterval = subject === 'MK' ? 6 : 12;
+  const scenarioInterval = subj === 'MK' ? 6 : 12;
   let scenario = (i % scenarioInterval === 0) || subject === 'MIXED';
   if (mode === 'mixed') scenario = true;
   // For mixed sessions, randomly choose AR or MK as a primary topic per problem
@@ -806,7 +968,7 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
           const types = effectiveSubject === 'AR' ? ["rate_distance","work_combined","percent_basic","ratio_proportion","average_mean","simple_interest","reading_table","percent_multistep","divide_simple","mixture","probability_basic","mode_of_set","next_in_sequence"] : ["algebra_linear","fraction_addsub","fraction_mult","fraction_divide","pythagorean","area_circle","volume_rect_prism","perimeter","angles_basic","decimal_ops","exponents_rules","algebra_two_step","algebra_distributive","percentage_change","unit_conversion","systems_two_eqs","polynomial_factor","compound_interest","median_mode"];
           let alt: Question | null = null;
           for (const t of types) {
-            const candidate = effectiveSubject === 'AR' ? generateARQuestion(t, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : 'hard'))) : generateMKQuestion(t, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : 'hard')));
+            const candidate = effectiveSubject === 'AR' ? generateARQuestion(t, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : (diff === 3 ? 'hard' : (diff === 4 ? 'very-hard' : 'master'))))) : generateMKQuestion(t, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : (diff === 3 ? 'hard' : (diff === 4 ? 'very-hard' : 'master')))));
             const csig = structuralSignature(candidate.text || '');
             if (!seenSigs.has(csig)) { alt = candidate; break; }
           }
@@ -836,16 +998,16 @@ export async function batchGenerateAI(n: number = 10, subject: "AR" | "MK" | "MI
   } else {
   const types = effectiveSubject === 'AR' ? ["rate_distance","work_combined","percent_basic","ratio_proportion","average_mean","simple_interest","reading_table","percent_multistep","divide_simple","mixture","probability_basic"] : ["algebra_linear","fraction_addsub","fraction_mult","fraction_divide","pythagorean","area_circle","volume_rect_prism","perimeter","decimal_ops","exponents_rules","algebra_two_step","algebra_distributive","percentage_change","unit_conversion","systems_two_eqs","polynomial_factor","compound_interest","median_mode"];
         const fallbackType = types[i % types.length];
-        const fallbackQ = effectiveSubject === 'AR' ? generateARQuestion(fallbackType, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : 'hard'))) : generateMKQuestion(fallbackType, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : 'hard')));
+        const fallbackQ = effectiveSubject === 'AR' ? generateARQuestion(fallbackType, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : (diff === 3 ? 'hard' : (diff === 4 ? 'very-hard' : 'master'))))) : generateMKQuestion(fallbackType, (diff === 1 ? 'easy' : (diff === 2 ? 'medium' : (diff === 3 ? 'hard' : (diff === 4 ? 'very-hard' : 'master')))));
         out.push(fallbackQ as Question);
         seen.add(normalizeText(fallbackQ.text || ''));
       }
     } catch (e) {
       // fallback to synchronous generator if AI fails
       const difficulty = recomm;
-  const types = subject === 'AR' ? ["rate_distance","work_combined","percent_basic","ratio_proportion","average_mean","simple_interest","reading_table","percent_multistep","divide_simple","mixture","probability_basic"] : ["algebra_linear","fraction_addsub","fraction_mult","fraction_divide","pythagorean","area_circle","volume_rect_prism","perimeter","decimal_ops","exponents_rules","algebra_two_step","algebra_distributive","percentage_change","unit_conversion","systems_two_eqs","polynomial_factor","compound_interest","median_mode"];
+    const types = subj === 'AR' ? ["rate_distance","work_combined","percent_basic","ratio_proportion","average_mean","simple_interest","reading_table","percent_multistep","divide_simple","mixture","probability_basic"] : ["algebra_linear","fraction_addsub","fraction_mult","fraction_divide","pythagorean","area_circle","volume_rect_prism","perimeter","decimal_ops","exponents_rules","algebra_two_step","algebra_distributive","percentage_change","unit_conversion","systems_two_eqs","polynomial_factor","compound_interest","median_mode"];
       const type = types[i % types.length];
-      const fallback = subject === 'AR' ? generateARQuestion(type, difficulty as any) : generateMKQuestion(type, difficulty as any);
+      const fallback = subj === 'AR' ? generateARQuestion(type, difficulty as any) : generateMKQuestion(type, difficulty as any);
       out.push(fallback);
     }
   }
@@ -859,6 +1021,28 @@ export function generateFullTest(): { arQuestions: Question[]; mkQuestions: Ques
   const mkQuestions = batchGenerate(120, "MK");
     try { purgeSessionCache({ keepUniqueCount: 1000 }); } catch (e) {}
   return { arQuestions, mkQuestions };
+}
+
+// New: Generate the ASVAB Full Practice sections (WK -> PC -> GS -> MK -> AR)
+export function generateFullPractice() {
+  const wkQuestions = batchGenerate(40, 'WK');
+  const pcQuestions = batchGenerate(20, 'PC');
+  const gsQuestions = batchGenerate(30, 'GS');
+  const mkQuestions = batchGenerate(30, 'MK');
+  const arQuestions = batchGenerate(35, 'AR');
+  try { purgeSessionCache({ keepUniqueCount: 1000 }); } catch (e) {}
+  return { wkQuestions, pcQuestions, gsQuestions, mkQuestions, arQuestions };
+}
+
+export async function generateFullPracticeAI(model: any = null) {
+  // For now, return the predefined banks as the AI generation; placeholder for future AI-enhanced variants
+  return {
+    wkQuestions: batchGenerate(40, 'WK'),
+    pcQuestions: batchGenerate(20, 'PC'),
+    gsQuestions: batchGenerate(30, 'GS'),
+    mkQuestions: batchGenerate(30, 'MK'),
+    arQuestions: batchGenerate(35, 'AR')
+  };
 }
 
 // Async full test using AI generation — generates AR & MK via AI while alternating topics and ensuring mix

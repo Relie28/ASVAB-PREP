@@ -12,7 +12,7 @@ import Dashboard from "@/components/Dashboard";
 import FullTest from "@/components/FullTest";
 import DailyTraining from "@/components/DailyTraining";
 
-type ViewMode = "home" | "study" | "quiz" | "dashboard" | "fulltest" | "veprobe" | "daily";
+type ViewMode = "home" | "study" | "quiz" | "dashboard" | "fulltest" | "daily";
 
 export default function Home() {
   const [currentView, setCurrentView] = useState<ViewMode>("home");

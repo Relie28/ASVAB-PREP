@@ -55,12 +55,209 @@ To run the local dev server with Fast Refresh (updates as you edit files):
 
 2. Notes and troubleshooting:
 
-- The project uses Next.js dev server which provides Fast Refresh for client components. Avoid wrapping `next dev` with tools that restart the process (e.g. `nodemon`) — that prevents HMR.
-- If your filesystem is remote or uses network mounts, set the environment variable `CHOKIDAR_USEPOLLING=1` before running the dev server to enable polling-based file watching.
-- If you still don't see live updates, check `next.config.ts` for `webpack.watchOptions`. The project is configured to ignore `node_modules` only so source files are watched correctly.
-- For server components (under `src/app`), some changes may require a full server refresh; client components (with `"use client"`) will update without a full reload.
-
 If you want, I can add a short npm script (e.g. `dev:poll`) that runs `CHOKIDAR_USEPOLLING=1 npm run dev` for networked filesystems.
+
+## ASVAB FULL PRACTICE — GLOBAL DIFFICULTY SCALING
+
+Easiest → Hardest across the entire list
+
+Difficulty tiers:
+
+Tier 1 – Foundation (recognition, direct recall)
+
+Tier 2 – Applied (one-step reasoning)
+
+Tier 3 – Multi-step (translation + math/logic)
+
+Tier 4 – High reasoning (inference, synthesis, traps)
+
+1️⃣ Word Knowledge (WK) — START HERE
+
+(Fast confidence wins, builds momentum)
+Time: 8 minutes
+Questions: 40
+
+Tier 1 (Q1–15) — Basic vocabulary
+
+Concrete, common words
+
+One obvious synonym
+
+Examples:
+
+Abundant
+
+Brief
+
+Assist
+
+Rapid
+
+Durable
+
+Tier 2 (Q16–25) — Moderate vocabulary
+
+Abstract meanings
+
+Multiple close options
+
+Examples:
+
+Efficient
+
+Maintain
+
+Predict
+
+Benefit
+
+Cautious
+
+Tier 3 (Q26–35) — Advanced vocabulary
+
+Contextual nuance
+
+Often misread
+
+Examples:
+
+Reluctant
+
+Inevitable
+
+Preserve
+
+Restrict
+
+Infer
+
+Tier 4 (Q36–40) — Hardest WK
+
+Rarely used words
+
+Elimination required
+
+Examples:
+
+Obsolete
+
+Isolate
+
+Excess
+
+Neutral
+
+Essential
+
+2️⃣ Paragraph Comprehension (PC)
+
+(Reading stamina + reasoning ramps)
+Time: 38 minutes
+Questions: 20
+
+Tier 1 (Q1–5) — Explicit facts
+
+Answer is stated directly
+
+“According to the passage…”
+
+Tier 2 (Q6–10) — Paraphrasing
+
+Same idea, different wording
+
+Vocabulary-in-context
+
+Tier 3 (Q11–15) — Inference
+
+Implied meaning
+
+Cause → effect
+
+Tier 4 (Q16–20) — Synthesis
+
+Main idea across paragraph
+
+Best-supported conclusion
+
+Trap answers go beyond the text
+
+⚠️ These final PC questions are where most AFQT points are lost
+
+3️⃣ General Science (GS)
+
+(Memory → application)
+Time: 11 minutes
+Questions: 30
+
+Tier 1 (Q1–10) — Basic facts
+
+Simple recall
+
+Examples:
+
+What organ pumps blood?
+
+What gas do humans breathe in?
+
+What planet do we live on?
+
+What part of the body is used to see?
+
+What do plants need to grow?
+
+What is water made of?
+
+What force pulls objects toward Earth?
+
+What star is closest to Earth?
+
+What sense detects sound?
+
+What organ helps you breathe?
+
+3️⃣ Mathematics Knowledge (MK)
+
+(Algebra & Geometry focus)
+Time: 23 minutes
+Questions: 30
+
+Tier 1 (Q1–10) — Basic algebra and arithmetic
+
+Solve simple linear equations, simplify expressions, basic number properties
+
+Tier 2 (Q11–20) — Intermediate algebra / geometry
+
+Two-step equations, coordinate basics, area/perimeter, Pythagorean
+
+Tier 3 (Q21–28) — Advanced geometry & algebra
+
+Multi-step solving, triangle relations, circle area/sector basics
+
+Tier 4 (Q29–30) — Hard MK problems
+
+Challenging algebra manipulations and multi-part geometric reasoning
+
+4️⃣ Arithmetic Reasoning (AR)
+
+(Multi-step word problems, applied math)
+Time: 55 minutes
+Questions: 35
+
+Tier 1 (Q1–10) — Direct calculations
+
+One-step word problems, basic percent/ratio
+
+Tier 2 (Q11–20) — Applied two-step
+
+Work-rate, rate×time, percentage with one follow-up step
+
+Tier 3 (Q21–30) — Multi-step translation
+
+Translate multi-step text into equations, unit conversions
+
+Tier 4 (Q31–35) — Hardest AR
+
+Complex multi-step problems requiring multi-stage reasoning and checking for traps
 
 The dashboard should also keep track of the user's current difficulty level based on how well they do as the question difficulties progress. If user is better at solving Easy questions they are at a level of "Easy"; if they have a balanced mix, "Intermediate"; if they solve many hard problems, "Hard".
 
